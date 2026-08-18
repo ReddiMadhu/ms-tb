@@ -69,11 +69,13 @@ export default function NewJobPage() {
       : null,
     mstr_username: !form.mstr_username.trim() ? 'MSTR Username is required' : null,
     mstr_password: !form.mstr_password ? 'MSTR Password is required' : null,
-    mstr_project_id: !form.mstr_project_id.trim() ? 'MSTR Project ID is required' : null,
+    mstr_project_id: null,  // Not mandatory — user selects from discovered list
   };
 
-  const isStep0Valid = !errors.name && !errors.mstr_base_url && !errors.mstr_username &&
-    !errors.mstr_password && !errors.mstr_project_id;
+  // Can test connection without project ID (to discover available projects)
+  const canTestConnection = !errors.name && !errors.mstr_base_url && !errors.mstr_username && !errors.mstr_password;
+  // Need project ID selected to proceed to next step
+  const isStep0Valid = canTestConnection;
 
   const isConnectionVerified = validationState === 'connected' || devModeBypass;
   const hasTableauTarget = !!form.tableau_server_url.trim();
@@ -85,7 +87,8 @@ export default function NewJobPage() {
   // Reset validation state if connection parameters change
   const handleConnectionParamChange = (field: keyof FormState, value: string) => {
     setForm(prev => ({ ...prev, [field]: value }));
-    if (validationState !== 'idle') {
+    // Only reset validation if server connection params change, NOT when selecting a project
+    if (field !== 'mstr_project_id' && validationState !== 'idle') {
       setValidationState('idle');
       setValidationResult(null);
     }
@@ -98,10 +101,11 @@ export default function NewJobPage() {
       mstr_base_url: true,
       mstr_username: true,
       mstr_password: true,
-      mstr_project_id: true,
+      mstr_project_id: autoAdvance,  // Only mark project_id touched if advancing
     });
 
-    if (!isStep0Valid) return false;
+    if (autoAdvance && !isStep0Valid) return false;
+    if (!canTestConnection) return false;
 
     setValidationState('validating');
     setApiError(null);
@@ -366,7 +370,7 @@ export default function NewJobPage() {
 
                 <div className="input-group">
                   <label className="input-label" style={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <span>MSTR Project ID (GUID) <span style={{ color: 'var(--primary)' }}>*</span></span>
+                    <span>MSTR Project ID (GUID)</span>
                     {touched.mstr_project_id && errors.mstr_project_id && (
                       <span style={{ color: 'var(--red)', fontSize: 11 }}>{errors.mstr_project_id}</span>
                     )}
@@ -379,6 +383,27 @@ export default function NewJobPage() {
                     onBlur={() => handleBlur('mstr_project_id')}
                     onChange={e => handleConnectionParamChange('mstr_project_id', e.target.value)}
                   />
+                  {validationResult?.projects && validationResult.projects.length > 0 && (
+                    <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      <span style={{ fontSize: 11, color: 'var(--ink-2)' }}>
+                        Available Projects on Server ({validationResult.projects.length}):
+                      </span>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                        {validationResult.projects.map(p => (
+                          <button
+                            key={p.id}
+                            type="button"
+                            className={`badge ${form.mstr_project_id === p.id ? 'badge-primary' : 'badge-neutral'}`}
+                            style={{ cursor: 'pointer', border: '1px solid var(--line)', padding: '4px 8px' }}
+                            onClick={() => handleConnectionParamChange('mstr_project_id', p.id)}
+                            title={`ID: ${p.id}${p.description ? ' - ' + p.description : ''}`}
+                          >
+                            {p.name} {p.id === form.mstr_project_id && '✓'}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -492,7 +517,7 @@ export default function NewJobPage() {
               <button
                 type="button"
                 className="btn btn-secondary"
-                disabled={validationState === 'validating' || !isStep0Valid}
+                disabled={validationState === 'validating' || !canTestConnection}
                 onClick={() => handleValidateConnection(false)}
               >
                 {validationState === 'validating' ? (
@@ -506,9 +531,13 @@ export default function NewJobPage() {
               <button
                 type="button"
                 className="btn btn-primary"
-                disabled={validationState === 'validating'}
+                disabled={validationState === 'validating' || (!isConnectionVerified && !isStep0Valid)}
                 onClick={async () => {
-                  if (isConnectionVerified) {
+                  if (!form.mstr_project_id.trim() && validationResult?.projects?.length) {
+                    setTouched(prev => ({ ...prev, mstr_project_id: true }));
+                    return;
+                  }
+                  if (isConnectionVerified && isStep0Valid) {
                     setStep(1);
                   } else {
                     await handleValidateConnection(true);

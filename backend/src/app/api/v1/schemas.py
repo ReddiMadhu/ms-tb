@@ -122,12 +122,23 @@ class DiscoveryResponse(BaseModel):
     scan_duration_ms: int
 
 
+class MSTRProjectInfo(BaseModel):
+    """MSTR project summary."""
+
+    id: str
+    name: str
+    description: Optional[str] = None
+    status: Optional[int] = None
+    alias: Optional[str] = None
+
+
 class ConnectionValidationResponse(BaseModel):
     """POST /discovery/validate-connection — lightweight connection test."""
 
     valid: bool
     project_name: Optional[str] = None
     server_version: Optional[str] = None
+    projects: list[MSTRProjectInfo] = Field(default_factory=list)
     error: Optional[str] = None
 
 

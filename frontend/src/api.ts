@@ -96,10 +96,19 @@ export interface ValidationResult {
   }>;
 }
 
+export interface MSTRProject {
+  id: string;
+  name: string;
+  description?: string;
+  status?: number;
+  alias?: string;
+}
+
 export interface ConnectionValidation {
   valid: boolean;
   project_name?: string;
   server_version?: string;
+  projects?: MSTRProject[];
   error?: string;
 }
 

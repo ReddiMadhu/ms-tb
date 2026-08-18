@@ -16,6 +16,7 @@ from app.api.v1.schemas import (
     DiscoveredDossier,
     DiscoveryRequest,
     DiscoveryResponse,
+    MSTRProjectInfo,
     ObjectListResponse,
     ObjectResponse,
 )
@@ -43,8 +44,8 @@ async def validate_connection(request: DiscoveryRequest):
     """
     POST /discovery/validate-connection — Lightweight connection test.
 
-    Attempts to authenticate with MSTR server using provided credentials.
-    Returns success/failure without scanning any dossiers.
+    Attempts to authenticate with MSTR server using provided credentials,
+    retrieves server version and all accessible projects.
     """
     session = MSTRSession(
         base_url=request.mstr_base_url,
@@ -57,20 +58,88 @@ async def validate_connection(request: DiscoveryRequest):
     try:
         session.authenticate()
 
-        # Optionally retrieve server info / project name if available
-        project_name = getattr(session, "project_name", None)
-        server_version = getattr(session, "server_version", None)
+        server_version = None
+        try:
+            status_resp = session.get_server_status()
+            server_version = status_resp.get("version") or status_resp.get("iServerVersion")
+        except Exception:
+            pass
+
+        projects: list[MSTRProjectInfo] = []
+        matched_project_name = None
+        try:
+            raw_projects = session.list_projects()
+            if isinstance(raw_projects, list):
+                for p in raw_projects:
+                    p_info = MSTRProjectInfo(
+                        id=p.get("id", ""),
+                        name=p.get("name", "Unnamed"),
+                        description=p.get("description"),
+                        status=p.get("status"),
+                        alias=p.get("alias"),
+                    )
+                    projects.append(p_info)
+                    if request.mstr_project_id and (
+                        p_info.id.lower() == request.mstr_project_id.lower()
+                        or p_info.name.lower() == request.mstr_project_id.lower()
+                    ):
+                        matched_project_name = p_info.name
+        except Exception as e:
+            logger.warning("Could not list projects during validation: %s", e)
 
         return ConnectionValidationResponse(
             valid=True,
-            project_name=project_name or request.mstr_project_id,
+            project_name=matched_project_name or request.mstr_project_id,
             server_version=server_version,
+            projects=projects,
         )
     except Exception as e:
         return ConnectionValidationResponse(
             valid=False,
             error=str(e),
         )
+    finally:
+        try:
+            session.close()
+        except Exception:
+            pass
+
+
+@router.post("/discovery/projects", response_model=list[MSTRProjectInfo])
+async def list_mstr_projects(request: DiscoveryRequest):
+    """
+    POST /discovery/projects — List all accessible MicroStrategy projects.
+
+    Connects with the provided credentials and returns all available projects.
+    """
+    session = MSTRSession(
+        base_url=request.mstr_base_url,
+        username=request.mstr_username,
+        password=request.mstr_password,
+        project_id="",
+        renewal_margin_s=settings.mstr_token_renewal_margin_s,
+    )
+
+    try:
+        session.authenticate()
+        raw_projects = session.list_projects()
+        projects: list[MSTRProjectInfo] = []
+        if isinstance(raw_projects, list):
+            for p in raw_projects:
+                projects.append(
+                    MSTRProjectInfo(
+                        id=p.get("id", ""),
+                        name=p.get("name", "Unnamed"),
+                        description=p.get("description"),
+                        status=p.get("status"),
+                        alias=p.get("alias"),
+                    )
+                )
+        return projects
+    except MSTRAuthError as e:
+        raise HTTPException(status_code=401, detail=f"Authentication failed: {e}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve projects: {e}")
     finally:
         try:
             session.close()

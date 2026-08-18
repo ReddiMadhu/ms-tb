@@ -144,12 +144,14 @@ class MSTRSession:
     @property
     def _headers(self) -> dict[str, str]:
         """Standard headers for all MSTR API calls."""
-        return {
+        headers = {
             "X-MSTR-AuthToken": self._token or "",
-            "X-MSTR-ProjectID": self.project_id,
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
+        if self.project_id:
+            headers["X-MSTR-ProjectID"] = self.project_id
+        return headers
 
     # ── Core HTTP methods ───────────────────────────────────────
 
@@ -161,6 +163,7 @@ class MSTRSession:
         json: Any = None,
         params: Optional[dict] = None,
         retry_on_401: bool = True,
+        skip_project_header: bool = False,
     ) -> httpx.Response:
         """
         Execute an authenticated MSTR API request.
@@ -169,14 +172,22 @@ class MSTRSession:
         - Proactive token renewal before TTL expiry
         - 401 → re-authenticate → retry once
         - 404 on instance endpoints → raise MSTRInstanceExpiredError
+
+        Args:
+            skip_project_header: If True, omit X-MSTR-ProjectID header.
+                Use for server-level endpoints like /api/projects and /api/status.
         """
         self._ensure_authenticated()
+
+        headers = self._headers
+        if skip_project_header:
+            headers = {k: v for k, v in headers.items() if k != "X-MSTR-ProjectID"}
 
         start = time.monotonic()
         resp = self._client.request(
             method,
             path,
-            headers=self._headers,
+            headers=headers,
             json=json,
             params=params,
         )
@@ -186,7 +197,7 @@ class MSTRSession:
         if resp.status_code == 401 and retry_on_401:
             logger.warning("MSTR 401 on %s %s — re-authenticating", method, path)
             self.authenticate()
-            return self._request(method, path, json=json, params=params, retry_on_401=False)
+            return self._request(method, path, json=json, params=params, retry_on_401=False, skip_project_header=skip_project_header)
 
         # 404 on cube/report instance — instance expired
         if resp.status_code == 404 and "/instances" in path:
@@ -194,15 +205,21 @@ class MSTRSession:
 
         # 404 with iServerCode -2147209151 — project idle/not loaded
         if resp.status_code == 404:
+            is_idle = False
+            idle_msg = ""
             try:
                 body = resp.json()
-                if body.get("iServerCode") == -2147209151:
-                    raise MSTRProjectIdleError(
-                        project_id=self.project_id,
-                        message=body.get("message", "Project is idle or not loaded"),
-                    )
-            except (json.JSONDecodeError, KeyError):
-                pass  # not the idle-project pattern, fall through
+                if isinstance(body, dict) and body.get("iServerCode") == -2147209151:
+                    is_idle = True
+                    idle_msg = body.get("message", "Project is idle or not loaded")
+            except Exception:
+                pass
+
+            if is_idle:
+                raise MSTRProjectIdleError(
+                    project_id=self.project_id,
+                    message=idle_msg,
+                )
 
         # 403 — permission denied (used for transitive BLOCKED poisoning)
         if resp.status_code == 403:
@@ -229,12 +246,12 @@ class MSTRSession:
 
     def get_server_status(self) -> dict:
         """GET /api/status — check server availability and version."""
-        resp = self.get("/api/status")
+        resp = self._request("GET", "/api/status", skip_project_header=True)
         return resp.json()
 
     def list_projects(self) -> list[dict]:
-        """GET /api/projects — list accessible projects."""
-        resp = self.get("/api/projects")
+        """GET /api/projects — list accessible projects (server-level, no project header)."""
+        resp = self._request("GET", "/api/projects", skip_project_header=True)
         return resp.json()
 
     def search_objects(

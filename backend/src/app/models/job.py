@@ -37,9 +37,9 @@ class Job(Base):
     mstr_project_name = Column(String)
     mstr_version = Column(String)
 
-    # ── Tableau Target ────────────────────────────────────────
-    tableau_server_url = Column(String, nullable=False)
-    tableau_site_id = Column(String, nullable=False)
+    # ── Tableau Target (optional — download-only mode if blank) ─
+    tableau_server_url = Column(String, nullable=True, default="")
+    tableau_site_id = Column(String, nullable=True, default="default")
     tableau_target_project = Column(String)
 
     # ── Options & Configuration ───────────────────────────────
