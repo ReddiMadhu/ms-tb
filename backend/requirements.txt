@@ -1,0 +1,38 @@
+# Web Framework & Server
+fastapi>=0.111.0
+uvicorn[standard]>=0.30.0
+python-multipart>=0.0.9
+
+# Database & ORM
+sqlalchemy>=2.0.30
+aiosqlite>=0.20.0
+
+# Settings & Validation
+pydantic>=2.7.0
+pydantic-settings>=2.3.0
+
+# HTTP Client (MSTR REST API)
+httpx>=0.27.0
+
+# Graph Analysis & Topological Sorting
+networkx>=3.3
+
+# LLM & AI Agents
+openai>=1.30.0
+
+# Tableau Integration
+tableauhyperapi>=0.0.19691
+tableauserverclient>=0.30
+
+# XML Processing & Manipulation
+lxml>=5.2.0
+
+# SQL Parsing & Transpilation
+sqlglot>=23.0.0
+
+# Data Processing
+pandas>=2.2.0
+
+# Utilities
+python-dotenv>=1.0.0
+rich>=13.7.0
