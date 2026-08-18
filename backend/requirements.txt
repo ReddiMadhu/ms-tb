@@ -19,6 +19,8 @@ networkx>=3.3
 
 # LLM & AI Agents
 openai>=1.30.0
+langchain-openai>=0.1.0
+langchain-core>=0.1.0
 
 # Tableau Integration
 tableauhyperapi>=0.0.19691

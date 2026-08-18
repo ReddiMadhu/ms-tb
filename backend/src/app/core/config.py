@@ -45,6 +45,11 @@ class Settings(BaseSettings):
     # ── LLM Configuration ────────────────────────────────────────────
     openai_api_key: str = ""
     openai_model: str = "gpt-4o-mini"
+    azure_openai_api_key: str = ""
+    azure_openai_endpoint: str = ""
+    azure_openai_deployment: str = "gpt-4o-2"
+    azure_openai_api_version: str = "2024-02-15-preview"
+    use_llm_cache: bool = True
     llm_cache_dir: str = "./artifacts/llm_cache"
 
     # ── Application Settings ─────────────────────────────────────────

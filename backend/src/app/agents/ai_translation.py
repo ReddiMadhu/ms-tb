@@ -7,7 +7,7 @@ ADR-018: LLM cache with SHA-256 hash-based JSON file cache
 Responsibilities:
   1. Hash lookup → known translations
   2. Pattern match → dimty→LOD template catalog
-  3. LLM fallback → GPT-4o with structured output
+  3. LLM fallback → via centralized get_llm() (OpenAI or Azure)
   4. sqlglot syntax validation of generated Tableau calc
 """
 
@@ -24,6 +24,7 @@ from typing import Optional
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.llm import get_llm
 from app.models.job import Job
 from app.models.objects import MigrationObject, ReviewTask
 
@@ -96,7 +97,7 @@ class AITranslationAgent:
     Uses a 3-tier fallback sequence:
     1. Hash lookup (cached translations)
     2. Pattern match (dimty→LOD templates)
-    3. LLM translation (GPT-4o with structured output)
+    3. LLM translation via centralized get_llm() (OpenAI or Azure)
 
     Only processes IR measures with confidence < 0.85.
     """
@@ -107,6 +108,7 @@ class AITranslationAgent:
         self.cache = TranslationCache(
             os.path.join(artifacts_dir, "translation_cache")
         )
+        self.llm = get_llm(temperature=0.1)
 
     async def run(self, ir) -> None:
         """
@@ -248,25 +250,20 @@ class AITranslationAgent:
 
     async def _llm_translate(self, measure) -> Optional[LLMTranslationResult]:
         """
-        Use OpenAI GPT-4o for expression translation (Tier 3).
+        Use centralized get_llm() for expression translation (Tier 3).
 
-        Direct API call with structured output — no LangChain.
+        Calls the LangChain-wrapped OpenAI/Azure client via .invoke().
         """
-        api_key = settings.openai_api_key
-        if not api_key:
-            logger.warning("No OpenAI API key — skipping LLM translation for %s", measure.name)
+        if not self.llm:
+            logger.warning("No LLM configured — skipping LLM translation for %s", measure.name)
             return LLMTranslationResult(
                 tableau_calc=f"// TODO: AI translation needed for {measure.name}",
-                explanation="No API key available",
+                explanation="No LLM API key configured",
                 confidence=0.30,
                 requires_human_review=True,
             )
 
         try:
-            import openai
-
-            client = openai.AsyncOpenAI(api_key=api_key)
-
             prompt = f"""Translate this MicroStrategy metric expression to a Tableau calculated field.
 
 MicroStrategy Metric: {measure.name}
@@ -285,15 +282,10 @@ Rules:
 Respond with JSON:
 {{"tableau_calc": "...", "explanation": "...", "confidence": 0.0-1.0, "requires_human_review": true/false}}"""
 
-            response = await client.chat.completions.create(
-                model=settings.openai_model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.1,
-                max_tokens=500,
-                response_format={"type": "json_object"},
-            )
+            response = self.llm.invoke(prompt)
 
-            content = response.choices[0].message.content
+            # Extract content from LangChain AIMessage or CachedAIMessage
+            content = response.content if hasattr(response, "content") else str(response)
             parsed = json.loads(content)
 
             # Validate with sqlglot
@@ -333,3 +325,4 @@ Respond with JSON:
             status="pending",
         )
         self.db.add(task)
+
