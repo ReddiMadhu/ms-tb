@@ -20,6 +20,7 @@ from app.api.v1.schemas import (
 from app.core.config import settings
 from app.db.session import get_db
 from app.models.job import Job
+from app.services.pipeline.orchestrator import run_pipeline
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
@@ -63,7 +64,15 @@ async def create_job(
     db.refresh(job)
 
     # Launch pipeline in background
-    # background_tasks.add_task(run_pipeline, job_id, request)
+    background_tasks.add_task(
+        run_pipeline,
+        job_id,
+        selected_dossier_ids=request.selected_dossier_ids,
+        mstr_username=request.mstr_username,
+        mstr_password=request.mstr_password,
+        tableau_token_name=request.tableau_token_name or "",
+        tableau_token_value=request.tableau_token_value or "",
+    )
 
     return job
 
@@ -131,8 +140,10 @@ async def list_artifacts(job_id: str, db: Session = Depends(get_db)):
                 "id": a.id,
                 "type": a.artifact_type,
                 "file_name": a.file_name,
-                "file_size_bytes": a.file_size_bytes,
-                "content_hash": a.content_hash,
+                "file_path": a.artifact_path,
+                "size_bytes": a.size_bytes,
+                "artifact_hash": a.artifact_hash,
+                "environment": a.environment,
             }
             for a in artifacts
         ],
@@ -156,13 +167,13 @@ async def download_artifact(job_id: str, artifact_id: str, db: Session = Depends
     if not artifact:
         raise HTTPException(status_code=404, detail=f"Artifact {artifact_id} not found")
 
-    file_path = Path(artifact.file_path)
+    file_path = Path(artifact.artifact_path)
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="Artifact file not found on disk")
 
     return FileResponse(
         path=str(file_path),
-        filename=artifact.file_name,
+        filename=artifact.file_name or file_path.name,
         media_type="application/octet-stream",
     )
 

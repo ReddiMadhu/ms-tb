@@ -341,6 +341,7 @@ class ValidationAgent:
             id=str(uuid.uuid4()),
             job_id=self.job.id,
             check_type=check.check_type,
+            check_name=check.check_type,
             object_id=check.object_id,
             expected_value=str(check.expected),
             actual_value=str(check.actual),

@@ -35,7 +35,8 @@ class ValidationCheck(Base):
     object_id = Column(String, ForeignKey("objects.id"))
 
     check_type = Column(String, nullable=False)
-    check_name = Column(String, nullable=False)
+    check_name = Column(String, nullable=True)
+    category = Column(String, nullable=True)
     filter_scenario = Column(String)
 
     expected_value = Column(Text)

@@ -3,22 +3,23 @@ import { useParams, Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import {
   CheckCircle2, Circle, Loader2, XCircle, Clock,
-  ArrowRightLeft, Eye, ShieldCheck, Pause, Play, X
+  ArrowRightLeft, Eye, ShieldCheck, X, Download, FileSpreadsheet, Database, Layers
 } from 'lucide-react';
-import { api, type Job } from '../api';
+import { api, type Job, type ArtifactItem } from '../api';
 
 const PIPELINE_STAGES = [
   { key: 'DISCOVERY', label: 'Discovery' },
   { key: 'GRAPH', label: 'Graph Analysis' },
   { key: 'SEMANTIC', label: 'Semantic Extraction' },
-  { key: 'PHYSICAL_PLAN', label: 'Physical Plan' },
+  { key: 'METRIC_DEDUPLICATION', label: 'Metric Deduplication' },
   { key: 'IR_COMPILE', label: 'IR Compilation' },
   { key: 'AI_TRANSLATE', label: 'AI Translation' },
-  { key: 'VISUALIZATION', label: 'Visualization' },
+  { key: 'VIZ', label: 'Visualization Planning' },
   { key: 'HYPER_BUILD', label: 'Hyper Build' },
-  { key: 'TABLEAU_EMIT', label: 'Tableau Emit' },
-  { key: 'VALIDATION', label: 'Validation' },
-  { key: 'PUBLISH', label: 'Publish' },
+  { key: 'DATASOURCE_EMIT', label: 'Datasource Emit' },
+  { key: 'WORKBOOK_EMIT_STAGING', label: 'Workbook Emit' },
+  { key: 'STATIC_VALIDATE', label: 'Validation' },
+  { key: 'REPORT', label: 'Report' },
 ];
 
 function stageStatus(stage: string, current: string | undefined, jobStatus: string) {
@@ -45,24 +46,35 @@ function StageIcon({ status }: { status: string }) {
   return <div className="pipeline-stage-icon pending"><Circle size={8} style={{ opacity: 0.3 }} /></div>;
 }
 
+function formatBytes(bytes: number) {
+  if (!bytes || bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
+}
+
 export default function JobDetailPage() {
   const { jobId } = useParams();
   const [job, setJob] = useState<Job | null>(null);
+  const [artifacts, setArtifacts] = useState<ArtifactItem[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     if (!jobId) return;
-    loadJob();
-    const interval = setInterval(loadJob, 5000);
+    loadData();
+    const interval = setInterval(loadData, 4000);
     return () => clearInterval(interval);
   }, [jobId]);
 
-  async function loadJob() {
+  async function loadData() {
     try {
-      const data = await api.getJob(jobId!);
-      setJob(data);
+      const jobData = await api.getJob(jobId!);
+      setJob(jobData);
+      const artData = await api.listArtifacts(jobId!).catch(() => ({ artifacts: [] }));
+      setArtifacts(artData.artifacts || []);
     } catch (e) {
-      console.error('Failed to load job:', e);
+      console.error('Failed to load job data:', e);
     } finally {
       setLoading(false);
     }
@@ -102,7 +114,16 @@ export default function JobDetailPage() {
             {job.id}
           </p>
         </div>
-        <div style={{ display: 'flex', gap: 6 }}>
+        <div style={{ display: 'flex', gap: 8 }}>
+          {artifacts.find(a => a.type === 'workbook') && (
+            <a
+              href={`/api/v1/jobs/${job.id}/download/${artifacts.find(a => a.type === 'workbook')!.id}`}
+              className="btn btn-primary btn-sm"
+              download
+            >
+              <Download size={13} /> Download .twbx
+            </a>
+          )}
           {isRunning && (
             <button className="btn btn-secondary btn-sm" onClick={() => api.cancelJob(job.id)}>
               <X size={13} /> Cancel
@@ -171,6 +192,64 @@ export default function JobDetailPage() {
           </div>
         </div>
       </motion.div>
+
+      {/* ── Generated Artifacts ─────────────────────────── */}
+      {artifacts.length > 0 && (
+        <motion.div
+          className="card"
+          style={{ marginTop: 16 }}
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.25 }}
+        >
+          <div className="card-header">
+            <span className="card-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Layers size={16} /> Generated Artifacts ({artifacts.length})
+            </span>
+          </div>
+          <div style={{ padding: '8px 16px 16px' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {artifacts.map(art => (
+                <div
+                  key={art.id}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    padding: '12px 14px',
+                    borderRadius: 'var(--radius-md)',
+                    background: 'var(--surface-2)',
+                    border: '1px solid var(--border-subtle)',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                    {art.type === 'workbook' ? (
+                      <FileSpreadsheet size={20} color="var(--primary)" />
+                    ) : (
+                      <Database size={20} color="var(--accent)" />
+                    )}
+                    <div>
+                      <div style={{ fontWeight: 600, fontSize: 13 }}>{art.file_name}</div>
+                      <div style={{ fontSize: 11, color: 'var(--ink-3)', display: 'flex', gap: 8, marginTop: 2 }}>
+                        <span className="badge badge-subtle" style={{ textTransform: 'uppercase', fontSize: 10 }}>{art.type}</span>
+                        <span>{formatBytes(art.size_bytes)}</span>
+                        {art.environment && <span>• {art.environment}</span>}
+                      </div>
+                    </div>
+                  </div>
+                  <a
+                    href={`/api/v1/jobs/${job.id}/download/${art.id}`}
+                    className="btn btn-secondary btn-sm"
+                    download
+                  >
+                    <Download size={13} /> Download
+                  </a>
+                </div>
+              ))}
+            </div>
+          </div>
+        </motion.div>
+      )}
 
       {/* ── Quick links ─────────────────────────────────── */}
       <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>

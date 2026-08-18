@@ -166,7 +166,7 @@ class TableauEmitterAgent:
             "source-build": TABLEAU_VERSION,
             "source-platform": "win",
             "version": TABLEAU_VERSION,
-            "xml:base": "https://localhost",
+            "{http://www.w3.org/XML/1998/namespace}base": "https://localhost",
         })
 
     def _emit_datasource(self, parent, ir, hyper_paths) -> etree._Element:
@@ -402,11 +402,9 @@ class TableauEmitterAgent:
             rewrite = DatasourcePathRewrite(
                 id=str(uuid.uuid4()),
                 job_id=self.job.id,
-                datasource_name=domain,
-                original_path=abs_path,
+                ir_datasource_id=domain,
                 staging_path=f"_migration_staging/Datasources/{domain}",
                 production_path=f"Data/Extracts/{domain}.hyper",
-                active_path=new_path,
             )
             self.db.add(rewrite)
 
@@ -450,10 +448,11 @@ class TableauEmitterAgent:
             id=str(uuid.uuid4()),
             job_id=self.job.id,
             artifact_type=artifact_type,
-            file_path=str(path),
+            artifact_path=str(path),
             file_name=path.name,
-            content_hash=content_hash,
-            file_size_bytes=file_size,
+            artifact_hash=content_hash,
+            environment=self.target_env,
+            size_bytes=file_size,
         )
         self.db.add(artifact)
         self.db.commit()

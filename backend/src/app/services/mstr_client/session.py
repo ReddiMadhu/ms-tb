@@ -336,6 +336,11 @@ class MSTRSession:
 
     # ── Cube / Report Instance Management ───────────────────────
 
+    def get_cube_definition(self, cube_id: str) -> dict:
+        """GET /api/v2/cubes/{id} — fetch Intelligent Cube definition, attributes, and metrics."""
+        resp = self.get(f"/api/v2/cubes/{cube_id}")
+        return resp.json()
+
     def create_cube_instance(self, cube_id: str) -> dict:
         """
         POST /api/v2/cubes/{id}/instances — create a new instance for paginated data access.
@@ -458,6 +463,9 @@ class AsyncMSTRSession:
 
     async def get_filter(self, filter_id: str) -> dict:
         return await asyncio.to_thread(self._session.get_filter, filter_id)
+
+    async def get_cube_definition(self, cube_id: str) -> dict:
+        return await asyncio.to_thread(self._session.get_cube_definition, cube_id)
 
     async def create_cube_instance(self, cube_id: str) -> dict:
         return await asyncio.to_thread(self._session.create_cube_instance, cube_id)

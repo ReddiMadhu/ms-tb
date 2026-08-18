@@ -204,6 +204,7 @@ export default function NewJobPage() {
         tableau_server_url: form.tableau_server_url || undefined,
         tableau_site_id: form.tableau_site_id,
         tableau_target_project: form.tableau_target_project,
+        selected_dossier_ids: selectedDossierIds.length > 0 ? selectedDossierIds : undefined,
         auto_publish: form.auto_publish,
         numeric_threshold: form.numeric_threshold,
       });

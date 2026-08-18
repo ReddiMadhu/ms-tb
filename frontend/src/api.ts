@@ -130,6 +130,16 @@ export interface DiscoveryResult {
   scan_duration_ms: number;
 }
 
+export interface ArtifactItem {
+  id: string;
+  type: string;
+  file_name: string;
+  file_path: string;
+  size_bytes: number;
+  artifact_hash: string;
+  environment: string;
+}
+
 // ── API functions ─────────────────────────────────────────────
 
 export const api = {
@@ -163,6 +173,9 @@ export const api = {
   getJob: (id: string) => fetchJSON<Job>(`/jobs/${id}`),
   createJob: (data: JobCreateInput) => fetchJSON<Job>('/jobs', { method: 'POST', body: JSON.stringify(data) }),
   cancelJob: (id: string) => fetchJSON<void>(`/jobs/${id}/cancel`, { method: 'POST' }),
+
+  // Artifacts
+  listArtifacts: (jobId: string) => fetchJSON<{ artifacts: ArtifactItem[]; total: number }>(`/jobs/${jobId}/artifacts`),
 
   // Objects
   listObjects: (jobId: string) => fetchJSON<{ objects: MigrationObject[]; total: number }>(`/jobs/${jobId}/objects`),
