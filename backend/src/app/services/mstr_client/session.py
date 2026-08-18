@@ -13,6 +13,7 @@ Key behaviors:
 """
 
 import asyncio
+import json
 import logging
 import time
 from datetime import datetime, timezone
@@ -31,6 +32,16 @@ class MSTRAuthError(Exception):
 class MSTRInstanceExpiredError(Exception):
     """Raised when a cube/report instance has expired (404)."""
     pass
+
+
+class MSTRProjectIdleError(Exception):
+    """Raised when the MSTR project is idle/unloaded on the Intelligence Server (iServerCode -2147209151)."""
+
+    def __init__(self, project_id: str, message: str = ""):
+        self.project_id = project_id
+        super().__init__(
+            message or f"MSTR project {project_id} is idle or not loaded on the Intelligence Server"
+        )
 
 
 class MSTRAPIError(Exception):
@@ -181,6 +192,18 @@ class MSTRSession:
         if resp.status_code == 404 and "/instances" in path:
             raise MSTRInstanceExpiredError(f"Instance expired at {path}")
 
+        # 404 with iServerCode -2147209151 — project idle/not loaded
+        if resp.status_code == 404:
+            try:
+                body = resp.json()
+                if body.get("iServerCode") == -2147209151:
+                    raise MSTRProjectIdleError(
+                        project_id=self.project_id,
+                        message=body.get("message", "Project is idle or not loaded"),
+                    )
+            except (json.JSONDecodeError, KeyError):
+                pass  # not the idle-project pattern, fall through
+
         # 403 — permission denied (used for transitive BLOCKED poisoning)
         if resp.status_code == 403:
             raise MSTRAPIError(403, "Forbidden — insufficient permissions", path)
@@ -242,6 +265,29 @@ class MSTRSession:
 
         resp = self.get("/api/searches/results", params=params)
         return resp.json().get("result", [])
+
+    def search_objects_with_retry(
+        self,
+        retry_delay_s: float = 3.0,
+        **kwargs,
+    ) -> list[dict]:
+        """
+        search_objects with a single retry on MSTRProjectIdleError.
+
+        When a project is idle, the first search call returns 404.
+        This method waits `retry_delay_s` seconds and retries once,
+        giving the Intelligence Server time to load the project.
+        """
+        try:
+            return self.search_objects(**kwargs)
+        except MSTRProjectIdleError:
+            logger.warning(
+                "Project %s is idle — retrying search in %ds",
+                self.project_id,
+                retry_delay_s,
+            )
+            time.sleep(retry_delay_s)
+            return self.search_objects(**kwargs)
 
     def get_dossier_definition(self, dossier_id: str) -> dict:
         """GET /api/v2/dossiers/{id}/definition — full dossier structure."""

@@ -4,6 +4,7 @@ Discovery and object API routes.
 Ref: spec/api.md §2 — Discovery, §3 — Objects
 """
 
+import logging
 import time
 from typing import Optional
 
@@ -21,7 +22,14 @@ from app.api.v1.schemas import (
 from app.core.config import settings
 from app.db.session import get_db
 from app.models.objects import MigrationObject
-from app.services.mstr_client.session import MSTRSession
+from app.services.mstr_client.session import (
+    MSTRAPIError,
+    MSTRAuthError,
+    MSTRProjectIdleError,
+    MSTRSession,
+)
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["discovery"])
 
@@ -96,7 +104,8 @@ async def discover_dossiers(request: DiscoveryRequest):
         session.authenticate()
 
         # Search for dossiers (type 55 = dossier in MSTR)
-        raw_dossiers = session.search_objects(object_type=55)
+        # Uses retry-aware method to handle idle/unloaded projects
+        raw_dossiers = session.search_objects_with_retry(object_type=55)
 
         dossiers = []
         for d in raw_dossiers:
@@ -118,8 +127,29 @@ async def discover_dossiers(request: DiscoveryRequest):
             total=len(dossiers),
             scan_duration_ms=duration_ms,
         )
+    except MSTRAuthError as e:
+        logger.error("MSTR authentication failed: %s", e)
+        raise HTTPException(status_code=401, detail=f"Authentication failed: {e}")
+    except MSTRProjectIdleError as e:
+        logger.warning("MSTR project idle after retry: %s", e)
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "The MicroStrategy project is idle or not loaded on the Intelligence Server. "
+                "Please try again in a few moments."
+            ),
+        )
+    except MSTRAPIError as e:
+        logger.error("MSTR API error during discovery: %s", e)
+        raise HTTPException(status_code=502, detail=f"MicroStrategy API error: {e}")
+    except Exception as e:
+        logger.exception("Unexpected error during dossier discovery")
+        raise HTTPException(status_code=500, detail=f"Discovery failed: {e}")
     finally:
-        session.close()
+        try:
+            session.close()
+        except Exception:
+            pass
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
