@@ -1,21 +1,60 @@
-import { NavLink, Outlet, useParams } from 'react-router-dom';
+import { Link, NavLink, Outlet, useParams } from 'react-router-dom';
 import { useTheme } from '../theme';
 import {
-  LayoutDashboard, FolderKanban, Eye, ShieldCheck, FileText,
-  Plus, Sun, Moon, ArrowRightLeft, AlertTriangle, CheckCircle2
+  LayoutDashboard, FolderKanban, Eye, ShieldCheck,
+  Plus, Sun, Moon, ArrowRightLeft, Radio
 } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { api } from '../api';
 
 export default function AppLayout() {
   const { theme, toggle } = useTheme();
   const { jobId } = useParams();
+  const [backendStatus, setBackendStatus] = useState<'checking' | 'online' | 'offline'>('checking');
+
+  useEffect(() => {
+    api.getStatus()
+      .then(() => setBackendStatus('online'))
+      .catch(() => setBackendStatus('offline'));
+  }, []);
 
   return (
     <div className="app-layout">
       {/* ── Sidebar ─────────────────────────────────────── */}
       <aside className="app-sidebar">
-        <div className="sidebar-logo">
-          <div className="sidebar-logo-icon">M</div>
-          <span className="sidebar-logo-text">Migration Platform</span>
+        <Link to="/" style={{ textDecoration: 'none' }}>
+          <div className="sidebar-logo">
+            <div className="sidebar-logo-icon">M</div>
+            <div>
+              <div className="sidebar-logo-text">MSTR → Tableau</div>
+              <div style={{ fontSize: 10, color: 'var(--ink-3)', fontWeight: 500 }}>Migration Platform</div>
+            </div>
+            <span className="sidebar-logo-badge">v0.1</span>
+          </div>
+        </Link>
+
+        {/* Backend health status badge */}
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          padding: '6px 10px',
+          background: 'var(--field)',
+          borderRadius: 'var(--radius-full)',
+          fontSize: 11,
+          fontWeight: 500,
+          color: 'var(--ink-2)',
+          marginBottom: 16
+        }}>
+          <span style={{
+            width: 7,
+            height: 7,
+            borderRadius: '50%',
+            backgroundColor: backendStatus === 'online' ? 'var(--green)' : backendStatus === 'offline' ? 'var(--red)' : 'var(--yellow)',
+            display: 'inline-block',
+            boxShadow: backendStatus === 'online' ? '0 0 6px var(--green)' : undefined
+          }} />
+          <span>API Engine: {backendStatus === 'online' ? 'Operational' : backendStatus === 'offline' ? 'Connecting...' : 'Checking'}</span>
         </div>
 
         <p className="sidebar-section-label">Navigation</p>

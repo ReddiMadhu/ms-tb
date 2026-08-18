@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.api.v1.schemas import (
+    ConnectionValidationResponse,
     DiscoveredDossier,
     DiscoveryRequest,
     DiscoveryResponse,
@@ -23,6 +24,50 @@ from app.models.objects import MigrationObject
 from app.services.mstr_client.session import MSTRSession
 
 router = APIRouter(tags=["discovery"])
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  Connection Validation (pre-wizard check)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+@router.post("/discovery/validate-connection", response_model=ConnectionValidationResponse)
+async def validate_connection(request: DiscoveryRequest):
+    """
+    POST /discovery/validate-connection — Lightweight connection test.
+
+    Attempts to authenticate with MSTR server using provided credentials.
+    Returns success/failure without scanning any dossiers.
+    """
+    session = MSTRSession(
+        base_url=request.mstr_base_url,
+        username=request.mstr_username,
+        password=request.mstr_password,
+        project_id=request.mstr_project_id,
+        renewal_margin_s=settings.mstr_token_renewal_margin_s,
+    )
+
+    try:
+        session.authenticate()
+
+        # Optionally retrieve server info / project name if available
+        project_name = getattr(session, "project_name", None)
+        server_version = getattr(session, "server_version", None)
+
+        return ConnectionValidationResponse(
+            valid=True,
+            project_name=project_name or request.mstr_project_id,
+            server_version=server_version,
+        )
+    except Exception as e:
+        return ConnectionValidationResponse(
+            valid=False,
+            error=str(e),
+        )
+    finally:
+        try:
+            session.close()
+        except Exception:
+            pass
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

@@ -122,6 +122,15 @@ class DiscoveryResponse(BaseModel):
     scan_duration_ms: int
 
 
+class ConnectionValidationResponse(BaseModel):
+    """POST /discovery/validate-connection — lightweight connection test."""
+
+    valid: bool
+    project_name: Optional[str] = None
+    server_version: Optional[str] = None
+    error: Optional[str] = None
+
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  Object Schemas (api.md §3)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

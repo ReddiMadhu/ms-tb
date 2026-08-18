@@ -1,4 +1,5 @@
-const API_BASE = 'http://localhost:8000/api/v1';
+// Use relative URL so Vite's proxy (vite.config.ts) handles the routing to the backend
+const API_BASE = '/api/v1';
 
 async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${url}`, {
@@ -10,6 +11,25 @@ async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
 }
 
 // ── Types ─────────────────────────────────────────────────────
+
+export interface JobCreateInput {
+  name: string;
+  mstr_base_url: string;
+  mstr_username: string;
+  mstr_password: string;
+  mstr_project_id: string;
+  tableau_server_url?: string;
+  tableau_site_id?: string;
+  tableau_target_project?: string;
+  template_version?: string;
+  skip_unused?: boolean;
+  extract_data?: boolean;
+  auto_publish?: boolean;
+  publish_mode?: string;
+  numeric_threshold?: number;
+  selected_dossier_ids?: string[];
+  warehouse_connection?: Record<string, any>;
+}
 
 export interface Job {
   id: string;
@@ -76,16 +96,63 @@ export interface ValidationResult {
   }>;
 }
 
+export interface ConnectionValidation {
+  valid: boolean;
+  project_name?: string;
+  server_version?: string;
+  error?: string;
+}
+
+export interface DiscoveredDossier {
+  mstr_id: string;
+  name: string;
+  path?: string;
+  description?: string;
+  owner?: string;
+  date_modified?: string;
+  datasets: string[];
+  metric_count: number;
+  attribute_count: number;
+}
+
+export interface DiscoveryResult {
+  dossiers: DiscoveredDossier[];
+  total: number;
+  scan_duration_ms: number;
+}
+
 // ── API functions ─────────────────────────────────────────────
 
 export const api = {
   // Status
   getStatus: () => fetchJSON<{ status: string; database: string; template_version: string }>('/status'),
 
+  // Connection Validation
+  validateConnection: (data: {
+    mstr_base_url: string;
+    mstr_username: string;
+    mstr_password: string;
+    mstr_project_id: string;
+  }) => fetchJSON<ConnectionValidation>('/discovery/validate-connection', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  }),
+
+  // Dossier Discovery
+  discoverDossiers: (data: {
+    mstr_base_url: string;
+    mstr_username: string;
+    mstr_password: string;
+    mstr_project_id: string;
+  }) => fetchJSON<DiscoveryResult>('/discovery/dossiers', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  }),
+
   // Jobs
   listJobs: () => fetchJSON<{ jobs: Job[]; total: number }>('/jobs'),
   getJob: (id: string) => fetchJSON<Job>(`/jobs/${id}`),
-  createJob: (data: Partial<Job>) => fetchJSON<Job>('/jobs', { method: 'POST', body: JSON.stringify(data) }),
+  createJob: (data: JobCreateInput) => fetchJSON<Job>('/jobs', { method: 'POST', body: JSON.stringify(data) }),
   cancelJob: (id: string) => fetchJSON<void>(`/jobs/${id}/cancel`, { method: 'POST' }),
 
   // Objects
