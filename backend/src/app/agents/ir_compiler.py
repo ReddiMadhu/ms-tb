@@ -503,7 +503,23 @@ class IRCompilerAgent:
         )
 
     def _persist_fingerprint(self, fp: SemanticFingerprint, ir_measure: IRMeasure):
-        """Persist semantic fingerprint to SQLite (ADR-027)."""
+        """Persist semantic fingerprint to SQLite (ADR-027).
+
+        Uses in-memory tracking + DB query to prevent duplicate inserts
+        within the same compilation batch (all measures may produce the
+        same fingerprint when expression ASTs are absent).
+        """
+        # Fast in-memory check for hashes we've already persisted this run
+        if not hasattr(self, '_seen_fingerprints'):
+            self._seen_fingerprints = set()
+
+        fp_key = (self.job.id, fp.fingerprint_hash)
+
+        if fp_key in self._seen_fingerprints:
+            # Already inserted in this batch — just mark shared
+            ir_measure.scope = "shared"
+            return
+
         existing = (
             self.db.query(SemanticFingerprintORM)
             .filter(
@@ -537,6 +553,9 @@ class IRCompilerAgent:
                 assigned_scope="local",
             )
             self.db.add(orm_fp)
+            self.db.flush()  # Make visible to subsequent queries in this session
+
+        self._seen_fingerprints.add(fp_key)
 
     # ── Caption Registry ────────────────────────────────────────
 

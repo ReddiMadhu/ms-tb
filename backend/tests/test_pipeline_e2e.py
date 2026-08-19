@@ -51,7 +51,7 @@ async def test_full_pipeline_produces_twbx_and_hyper(db_session, client, tmp_pat
         },
     )
 
-    # 2. Attribute: Category
+    # 2. Attribute: Category (uses string dataType to verify robust parsing)
     attr_category = MigrationObject(
         job_id=job_id,
         mstr_id="ATTR-CAT-002",
@@ -63,8 +63,8 @@ async def test_full_pipeline_produces_twbx_and_hyper(db_session, client, tmp_pat
             "id": "ATTR-CAT-002",
             "name": "Category",
             "forms": [
-                {"name": "ID", "id": "FORM-ID-2", "dataType": {"type": "string"}},
-                {"name": "DESC", "id": "FORM-DESC-2", "dataType": {"type": "string"}},
+                {"name": "ID", "id": "FORM-ID-2", "dataType": "string"},
+                {"name": "DESC", "id": "FORM-DESC-2", "dataType": "string"},
             ],
             "relationships": [],
         },

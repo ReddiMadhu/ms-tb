@@ -207,24 +207,45 @@ class SemanticAgent:
         """Extract attribute with all forms (ID, DESC, compound keys)."""
         detail = obj.mstr_definition or await self.mstr.get_attribute(obj.mstr_id)
 
-        forms_raw = detail.get("forms", [])
+        forms_raw = detail.get("forms", []) if isinstance(detail, dict) else []
         forms = []
         id_form = None
         desc_form = None
 
         for f in forms_raw:
+            if not isinstance(f, dict):
+                continue
+            raw_dt = f.get("dataType", "string")
+            if isinstance(raw_dt, dict):
+                data_type = raw_dt.get("type", "string")
+            elif isinstance(raw_dt, str):
+                data_type = raw_dt
+            else:
+                data_type = "string"
+
+            form_name = f.get("name", "")
+            form_id = f.get("id", "")
             form_entry = {
-                "form_name": f.get("name", ""),
-                "form_id": f.get("id", ""),
-                "data_type": f.get("dataType", {}).get("type", "string"),
-                "is_pk": f.get("name", "").upper() in ("ID", "KEY"),
+                "form_name": form_name,
+                "form_id": form_id,
+                "data_type": data_type,
+                "is_pk": form_name.upper() in ("ID", "KEY"),
             }
             forms.append(form_entry)
 
-            if f.get("name", "").upper() == "ID":
-                id_form = f.get("id", "")
-            elif f.get("name", "").upper() in ("DESC", "DESCRIPTION"):
-                desc_form = f.get("id", "")
+            if form_name.upper() == "ID":
+                id_form = form_id
+            elif form_name.upper() in ("DESC", "DESCRIPTION"):
+                desc_form = form_id
+
+        # Fallback if no forms were explicitly defined (e.g. managed objects)
+        if not forms:
+            id_form = "1"
+            desc_form = "2"
+            forms = [
+                {"form_name": "ID", "form_id": id_form, "data_type": "string", "is_pk": True},
+                {"form_name": "DESC", "form_id": desc_form, "data_type": "string", "is_pk": False},
+            ]
 
         # Detect compound keys
         compound_key = None
@@ -234,10 +255,12 @@ class SemanticAgent:
 
         # Extract relationships
         relationships = []
-        for child in detail.get("relationships", []):
-            child_id = child.get("relatedAttribute", {}).get("objectId")
-            if child_id:
-                relationships.append(child_id)
+        if isinstance(detail, dict):
+            for child in detail.get("relationships", []):
+                if isinstance(child, dict):
+                    child_id = child.get("relatedAttribute", {}).get("objectId")
+                    if child_id:
+                        relationships.append(child_id)
 
         return DimensionDef(
             mstr_id=obj.mstr_id,
@@ -254,17 +277,27 @@ class SemanticAgent:
     async def _extract_fact(self, obj: MigrationObject) -> FactDef:
         """Extract fact definition with column mapping."""
         detail = obj.mstr_definition or await self.mstr.get_fact(obj.mstr_id)
+        if not isinstance(detail, dict):
+            detail = {}
 
         expressions = detail.get("expressions", [])
-        data_type = detail.get("dataType", {}).get("type", "numeric")
+        raw_dt = detail.get("dataType", "numeric")
+        if isinstance(raw_dt, dict):
+            data_type = raw_dt.get("type", "numeric")
+        elif isinstance(raw_dt, str):
+            data_type = raw_dt
+        else:
+            data_type = "numeric"
 
         # Extract table references
         tables = []
         for expr in expressions:
-            for tbl in expr.get("tables", []):
-                tbl_name = tbl.get("name", "")
-                if tbl_name:
-                    tables.append(tbl_name)
+            if isinstance(expr, dict):
+                for tbl in expr.get("tables", []):
+                    if isinstance(tbl, dict):
+                        tbl_name = tbl.get("name", "")
+                        if tbl_name:
+                            tables.append(tbl_name)
 
         return FactDef(
             mstr_id=obj.mstr_id,
@@ -284,11 +317,20 @@ class SemanticAgent:
         prompt-in-condition, and semi-additive facts.
         """
         detail = obj.mstr_definition or await self.mstr.get_metric(obj.mstr_id)
+        if not isinstance(detail, dict):
+            detail = {}
 
         # Expression AST
-        expression = detail.get("expression", {})
-        expression_ast = expression.get("tree", expression.get("tokens"))
-        expression_text = expression.get("text")
+        expression = detail.get("expression")
+        if isinstance(expression, dict):
+            expression_ast = expression.get("tree", expression.get("tokens"))
+            expression_text = expression.get("text")
+        elif isinstance(expression, str):
+            expression_ast = None
+            expression_text = expression
+        else:
+            expression_ast = None
+            expression_text = None
 
         # Dimensionality (dimty)
         dimty = detail.get("dimty", detail.get("dimensionality"))
@@ -423,14 +465,21 @@ class SemanticAgent:
     async def _extract_filter(self, obj: MigrationObject) -> FilterDef:
         """Extract filter definition with predicate AST."""
         detail = obj.mstr_definition or await self.mstr.get_filter(obj.mstr_id)
+        if not isinstance(detail, dict):
+            detail = {}
 
-        predicate = detail.get("expression", {})
+        predicate = detail.get("expression")
+        if isinstance(predicate, dict):
+            predicate_ast = predicate.get("tree", predicate.get("tokens"))
+        else:
+            predicate_ast = None
+
         qualification = detail.get("qualificationType", "unknown")
 
         return FilterDef(
             mstr_id=obj.mstr_id,
             name=obj.name,
-            predicate_ast=predicate.get("tree"),
+            predicate_ast=predicate_ast,
             qualification_type=qualification,
             is_security_filter="security" in detail.get("type", "").lower(),
         )

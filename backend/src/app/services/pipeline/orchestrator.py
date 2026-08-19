@@ -146,6 +146,10 @@ class PipelineOrchestrator:
                 logger.info("Pipeline complete for job %s", self.job_id)
 
             except Exception as e:
+                try:
+                    db.rollback()
+                except Exception:
+                    pass  # Rollback may fail if session is already invalidated
                 job.status = "FAILED"
                 job.error_message = str(e)[:2000]
                 job.completed_at = datetime.now(timezone.utc)
@@ -222,16 +226,25 @@ class PipelineOrchestrator:
             return
 
         # Create MSTR session (objects may already have cached definitions from discovery)
+        base_url = job.mstr_base_url or settings.mstr_base_url
+        username = self.mstr_username or settings.mstr_username
+        password = self.mstr_password or settings.mstr_password
+        project_id = job.mstr_project_id or settings.mstr_project_id
+
         sync_session = MSTRSession(
-            base_url=settings.mstr_base_url,
-            username=self.mstr_username or settings.mstr_username,
-            password=self.mstr_password or settings.mstr_password,
-            project_id=settings.mstr_project_id,
+            base_url=base_url,
+            username=username,
+            password=password,
+            project_id=project_id,
         )
         mstr = AsyncMSTRSession(sync_session)
 
         try:
-            await mstr.authenticate()
+            try:
+                await mstr.authenticate()
+            except Exception as auth_err:
+                logger.warning("MSTR re-auth in semantic stage failed (will use cached object definitions): %s", auth_err)
+
             agent = SemanticAgent(db=db, job=job, mstr=mstr)
             bundle = await agent.run(object_ids=object_ids)
 
