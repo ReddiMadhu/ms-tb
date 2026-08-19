@@ -326,6 +326,72 @@ class PipelineOrchestrator:
         compiler = IRCompilerAgent(db=db, job=job)
         ir = compiler.compile(bundle, physical_plan)
 
+        # Extract visuals from dossier definition (Phase 3: ROOT CAUSE #2)
+        from app.agents.ir_compiler import IRVisual
+        from app.models.objects import MigrationObject
+        import uuid as uuid_mod
+
+        dossier_objs = db.query(MigrationObject).filter(
+            MigrationObject.job_id == job.id,
+            MigrationObject.type_name == "dossier",
+        ).all()
+
+        for dossier_obj in dossier_objs:
+            defn = dossier_obj.mstr_definition
+            if not isinstance(defn, dict):
+                continue
+
+            # MSTR dossier definition has chapters > pages > visualizations
+            for chapter in defn.get("chapters", []):
+                if not isinstance(chapter, dict):
+                    continue
+                for page in chapter.get("pages", []):
+                    if not isinstance(page, dict):
+                        continue
+                    for viz in page.get("visualizations", []):
+                        if not isinstance(viz, dict):
+                            continue
+                        viz_key = viz.get("key", viz.get("id", ""))
+                        viz_name = viz.get("name", f"Viz_{viz_key}")
+                        viz_type = viz.get("visualizationType", "grid").lower()
+
+                        # Extract field references from viz definition
+                        rows = []
+                        columns = []
+                        color_field = None
+                        size_field = None
+
+                        # Parse selector/shelves if available
+                        selectors = viz.get("selector", {})
+                        if isinstance(selectors, dict):
+                            for sel in selectors.get("selectors", []):
+                                if isinstance(sel, dict):
+                                    shelf = sel.get("shelf", "").lower()
+                                    elements = sel.get("elements", [])
+                                    for elem in elements:
+                                        if isinstance(elem, dict):
+                                            elem_name = elem.get("name", "")
+                                            if elem_name:
+                                                if shelf in ("rows", "row"):
+                                                    rows.append(elem_name)
+                                                elif shelf in ("columns", "column", "cols"):
+                                                    columns.append(elem_name)
+                                                elif shelf == "color":
+                                                    color_field = elem_name
+                                                elif shelf == "size":
+                                                    size_field = elem_name
+
+                        ir_visual = IRVisual(
+                            id=str(uuid_mod.uuid4()),
+                            name=viz_name,
+                            mark_type=viz_type,
+                            rows=rows,
+                            columns=columns,
+                            color=color_field,
+                            size=size_field,
+                        )
+                        ir.visuals.append(ir_visual)
+
         # Persist IR as JSON artifact
         ir_path = os.path.join(artifacts_dir, "ir.json")
         with open(ir_path, "w") as f:
@@ -337,9 +403,9 @@ class PipelineOrchestrator:
             json.dump(dataclasses.asdict(physical_plan), f, indent=2, default=str)
 
         logger.info(
-            "IR compiled: %d tables, %d dims, %d measures, %d filters, %d issues",
+            "IR compiled: %d tables, %d dims, %d measures, %d filters, %d visuals, %d issues",
             len(ir.tables), len(ir.dimensions), len(ir.measures),
-            len(ir.filters), len(ir.issues),
+            len(ir.filters), len(ir.visuals), len(ir.issues),
         )
 
     async def _run_ai_translate(self, db: Session, job: Job):

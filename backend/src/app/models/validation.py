@@ -32,7 +32,7 @@ class ValidationCheck(Base):
 
     id = Column(String, primary_key=True, default=_uuid)
     job_id = Column(String, ForeignKey("jobs.id"), nullable=False)
-    object_id = Column(String, ForeignKey("objects.id"))
+    object_id = Column(String)
 
     check_type = Column(String, nullable=False)
     check_name = Column(String, nullable=True)

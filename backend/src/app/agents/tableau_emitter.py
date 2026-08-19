@@ -51,6 +51,22 @@ logger = logging.getLogger(__name__)
 TABLEAU_VERSION = "2024.2"
 TWB_XML_NS = "http://www.tableau.com"
 
+# Valid Tableau mark class values (case-sensitive)
+MARK_CLASS_MAP = {
+    "text": "Text",
+    "bar": "Bar",
+    "line": "Line",
+    "area": "Area",
+    "circle": "Circle",
+    "square": "Square",
+    "shape": "Shape",
+    "map": "Map",
+    "pie": "Pie",
+    "ganttbar": "Gantt Bar",
+    "polygon": "Polygon",
+    "automatic": "Automatic",
+}
+
 
 class TableauEmitterAgent:
     """
@@ -96,9 +112,11 @@ class TableauEmitterAgent:
 
         # Step 3: Add worksheets
         worksheets_node = etree.SubElement(root, "worksheets")
+        ws_number = 1
         for ws_spec in viz_plan.worksheets:
             if not ws_spec.is_failed:
-                self._emit_worksheet(worksheets_node, ws_spec)
+                self._emit_worksheet(worksheets_node, ws_spec, ws_number)
+                ws_number += 1
 
         # Step 4: Add dashboards
         dashboards_node = etree.SubElement(root, "dashboards")
@@ -107,11 +125,17 @@ class TableauEmitterAgent:
 
         # Step 5: Add windows
         windows_node = etree.SubElement(root, "windows")
+        active_set = False
         for ws_spec in viz_plan.worksheets:
             if not ws_spec.is_failed:
-                self._emit_window(windows_node, ws_spec.name)
+                self._emit_window(windows_node, ws_spec.name, is_active=not active_set)
+                active_set = True
         for dash_spec in viz_plan.dashboards:
             self._emit_window(windows_node, dash_spec.name, is_dashboard=True)
+
+        # Step 5b: Add required trailing workbook elements
+        etree.SubElement(root, "thumbnails")
+        etree.SubElement(root, "datagraph")
 
         # Step 6: Write TWB
         twb_path = twb_dir / f"{workbook_name}.twb"
@@ -160,14 +184,31 @@ class TableauEmitterAgent:
     # ── TWB XML building ────────────────────────────────────────
 
     def _create_workbook_root(self) -> etree._Element:
-        """Create the root <workbook> element with required attributes."""
-        return etree.Element("workbook", attrib={
+        """Create the root <workbook> element with required attributes and children."""
+        root = etree.Element("workbook", attrib={
             "original-version": TABLEAU_VERSION,
             "source-build": TABLEAU_VERSION,
             "source-platform": "win",
             "version": TABLEAU_VERSION,
             "{http://www.w3.org/XML/1998/namespace}base": "https://localhost",
         })
+
+        # Document format change manifest (required for XSD validation)
+        manifest = etree.SubElement(root, "document-format-change-manifest")
+        etree.SubElement(manifest, "_.fcp.MarkAnimation.true...fcp.MarkAnimation")
+        etree.SubElement(manifest, "_.fcp.ObjectModelEncapsulateLegacy.true...fcp.ObjectModelEncapsulateLegacy")
+        etree.SubElement(manifest, "_.fcp.ObjectModelTableType.true...fcp.ObjectModelTableType")
+        etree.SubElement(manifest, "_.fcp.SchemaViewerObjectModel.true...fcp.SchemaViewerObjectModel")
+        etree.SubElement(manifest, "SheetIdentifierTracking", attrib={"consideredSheetIdentifierTracking": "true"})
+
+        etree.SubElement(root, "preferences")
+
+        # Global style
+        style = etree.SubElement(root, "style")
+        rule = etree.SubElement(style, "style-rule", attrib={"element": "worksheet"})
+        format_el = etree.SubElement(rule, "format", attrib={"attr": "sheet-title-font-size", "value": "12"})
+
+        return root
 
     def _emit_datasource(self, parent, ir, hyper_paths) -> etree._Element:
         """Emit a datasource element with columns, calcs, and connection."""
@@ -190,7 +231,7 @@ class TableauEmitterAgent:
         return ds
 
     def _inject_connection(self, ds_node, ir, hyper_paths):
-        """Inject connection XML pointing to Hyper file or live source."""
+        """Inject connection XML pointing to Hyper file with proper join tree."""
         conn = etree.SubElement(ds_node, "connection", attrib={
             "class": "hyper",
             "dbname": "",
@@ -205,21 +246,18 @@ class TableauEmitterAgent:
             conn.set("dbname", path)
             break  # Use first path
 
-        # Logical tables
+        # Build relation tree
         if ir.tables:
-            relation = etree.SubElement(conn, "relation", attrib={
-                "name": "Extract",
-                "table": f"[Extract].[{ir.tables[0].physical_name}]",
-                "type": "table",
-            })
-
-            # Multi-table relationships
-            if len(ir.tables) > 1:
-                for rel in ir.relationships:
-                    cols_left = etree.SubElement(conn, "cols", attrib={
-                        "left": ", ".join(rel.left_keys),
-                        "right": ", ".join(rel.right_keys),
-                    })
+            if len(ir.tables) == 1 or not ir.relationships:
+                # Single table — simple relation
+                etree.SubElement(conn, "relation", attrib={
+                    "name": "Extract",
+                    "table": f"[Extract].[{ir.tables[0].physical_name}]",
+                    "type": "table",
+                })
+            else:
+                # Multi-table star schema — build join tree
+                self._build_join_tree(conn, ir)
 
     def _inject_datasource_columns(self, ds_node, ir):
         """Inject dimension columns into datasource."""
@@ -231,8 +269,6 @@ class TableauEmitterAgent:
                 "role": dim.role,
                 "type": "nominal" if dim.data_type == "string" else "ordinal",
             })
-            if dim.remote_name:
-                col.set("remote-name", dim.remote_name)
             if dim.hidden:
                 col.set("hidden", "true")
 
@@ -249,8 +285,6 @@ class TableauEmitterAgent:
                 "role": "measure",
                 "type": "quantitative",
             })
-            if measure.remote_name:
-                col.set("remote-name", measure.remote_name)
 
             # Formula with XML entity encoding
             calc = etree.SubElement(col, "calculation", attrib={
@@ -278,68 +312,98 @@ class TableauEmitterAgent:
 
         return result
 
-    def _emit_worksheet(self, parent, ws_spec):
-        """Emit a <worksheet> element."""
+    def _emit_worksheet(self, parent, ws_spec, ws_number: int = 1):
+        """Emit a schema-valid <worksheet> element with all required XSD children."""
         ws = etree.SubElement(parent, "worksheet", attrib={
             "name": ws_spec.name,
         })
 
         table = etree.SubElement(ws, "table")
 
-        # View (mark type + shelves)
+        # 1. view
         view = etree.SubElement(table, "view")
-
-        # Mark type
-        mark = etree.SubElement(view, "mark", attrib={
-            "class": ws_spec.mark_type,
+        ds_node = etree.SubElement(view, "datasources")
+        etree.SubElement(ds_node, "datasource", attrib={
+            "caption": "Migrated Data",
+            "name": "federated.default",
         })
 
-        # Rows shelf
-        if ws_spec.rows:
-            rows_el = etree.SubElement(view, "rows")
-            rows_el.text = " ".join(f"[{r.name}]" for r in ws_spec.rows)
-
-        # Columns shelf
-        if ws_spec.columns:
-            cols_el = etree.SubElement(view, "cols")
-            cols_el.text = " ".join(f"[{c.name}]" for c in ws_spec.columns)
-
-        # Color encoding
-        if ws_spec.color:
-            enc = etree.SubElement(view, "encoding", attrib={
-                "type": "color",
-                "field": f"[{ws_spec.color.name}]",
-            })
-
-        # Size encoding
-        if ws_spec.size:
-            enc = etree.SubElement(view, "encoding", attrib={
-                "type": "size",
-                "field": f"[{ws_spec.size.name}]",
-            })
-
-        # Filters
         for flt in ws_spec.filters:
-            filter_el = etree.SubElement(table, "filter", attrib={
+            filter_el = etree.SubElement(view, "filter", attrib={
                 "class": flt.filter_type,
-                "column": f"[{flt.field_name}]",
+                "column": f"[federated.default].[{flt.field_name}]",
             })
             if flt.is_context:
                 filter_el.set("context", "true")
 
+        etree.SubElement(view, "aggregation", attrib={"value": "true"})
+
+        # 2. style
+        etree.SubElement(table, "style")
+
+        # 3. panes
+        panes = etree.SubElement(table, "panes")
+        pane = etree.SubElement(panes, "pane", attrib={"id": "0"})
+        pane_view = etree.SubElement(pane, "view")
+        etree.SubElement(pane_view, "breakdown", attrib={"value": "auto"})
+
+        # Fix mark class: capitalize properly for Tableau XSD
+        raw_mark = ws_spec.mark_type or "automatic"
+        mark_class = MARK_CLASS_MAP.get(raw_mark.lower(), "Automatic")
+        etree.SubElement(pane, "mark", attrib={"class": mark_class})
+
+        encodings = etree.SubElement(pane, "encodings")
+        if ws_spec.color:
+            etree.SubElement(encodings, "color", attrib={
+                "column": f"[federated.default].[{ws_spec.color.name}]",
+            })
+        if ws_spec.size:
+            etree.SubElement(encodings, "size", attrib={
+                "column": f"[federated.default].[{ws_spec.size.name}]",
+            })
+
+        # 4. rows
+        rows_el = etree.SubElement(table, "rows")
+        if ws_spec.rows:
+            rows_el.text = " ".join(f"[federated.default].[{r.name}]" for r in ws_spec.rows)
+
+        # 5. cols
+        cols_el = etree.SubElement(table, "cols")
+        if ws_spec.columns:
+            cols_el.text = " ".join(f"[federated.default].[{c.name}]" for c in ws_spec.columns)
+
+        # 6. Required XSD children: simple-id and worksheet-number
+        etree.SubElement(ws, "simple-id", attrib={
+            "uuid": "{" + str(uuid.uuid4()).upper() + "}",
+        })
+        ws_num_el = etree.SubElement(ws, "worksheet-number")
+        ws_num_el.set("value", str(ws_number))
+
     def _emit_dashboard(self, parent, dash_spec, all_worksheets):
-        """Emit a <dashboard> element with auto-tiled zones (ADR-008)."""
+        """Emit a schema-valid <dashboard> element with all required XSD children."""
         dash = etree.SubElement(parent, "dashboard", attrib={
             "name": dash_spec.name,
         })
 
-        size = etree.SubElement(dash, "size", attrib={
+        # Required: style
+        etree.SubElement(dash, "style")
+
+        # Required: size
+        etree.SubElement(dash, "size", attrib={
             "maxheight": "1200",
             "maxwidth": "1920",
             "minheight": "600",
             "minwidth": "800",
         })
 
+        # Required: datasources
+        ds_refs = etree.SubElement(dash, "datasources")
+        etree.SubElement(ds_refs, "datasource", attrib={
+            "caption": "Migrated Data",
+            "name": "federated.default",
+        })
+
+        # Zones
         zones = etree.SubElement(dash, "zones")
 
         # Root zone container
@@ -360,29 +424,145 @@ class TableauEmitterAgent:
 
         for i, ws in enumerate(valid_worksheets):
             zone_id = str(i + 2)
-            ws_zone = etree.SubElement(root_zone, "zone", attrib={
-                "h": str(100000 // max(len(valid_worksheets), 1)),
+            zone_h = 100000 // max(len(valid_worksheets), 1)
+            etree.SubElement(root_zone, "zone", attrib={
+                "h": str(zone_h),
                 "id": zone_id,
                 "name": ws.name,
                 "type-v2": "layout-basic",
                 "w": "100000",
                 "x": "0",
-                "y": str(i * (100000 // max(len(valid_worksheets), 1))),
+                "y": str(i * zone_h),
             })
 
         # Dashboard filters
         for flt in dash_spec.filters:
-            filter_el = etree.SubElement(dash, "filter", attrib={
+            etree.SubElement(dash, "filter", attrib={
                 "class": flt.filter_type,
                 "column": f"[{flt.field_name}]",
             })
 
-    def _emit_window(self, parent, name: str, is_dashboard: bool = False):
-        """Emit a <window> element for navigation."""
+        # Required: devicelayouts
+        etree.SubElement(dash, "devicelayouts")
+
+        # Required: simple-id
+        etree.SubElement(dash, "simple-id", attrib={
+            "uuid": "{" + str(uuid.uuid4()).upper() + "}",
+        })
+
+    def _build_join_tree(self, conn, ir):
+        """Build a proper join-tree relation for multi-table star schemas."""
+        # Find fact table (or first table as anchor)
+        fact_tables = [t for t in ir.tables if t.name.startswith("FACT")]
+        anchor = fact_tables[0] if fact_tables else ir.tables[0]
+        dim_tables = [t for t in ir.tables if t.name != anchor.name]
+
+        if not dim_tables:
+            # Single table
+            etree.SubElement(conn, "relation", attrib={
+                "name": anchor.physical_name,
+                "table": f"[Extract].[{anchor.physical_name}]",
+                "type": "table",
+            })
+            return
+
+        # Build nested join relations: ((anchor JOIN dim1) JOIN dim2) ...
+        # Construct the join tree bottom-up to avoid lxml parent-child issues
+        joinable_dims = []
+        for dim in dim_tables:
+            for rel in ir.relationships:
+                if (rel.left_table == anchor.name and rel.right_table == dim.name) or \
+                   (rel.left_table == dim.name and rel.right_table == anchor.name):
+                    joinable_dims.append((dim, rel))
+                    break
+
+        if not joinable_dims:
+            # No joinable dims found — emit as single table
+            etree.SubElement(conn, "relation", attrib={
+                "name": anchor.physical_name,
+                "table": f"[Extract].[{anchor.physical_name}]",
+                "type": "table",
+            })
+            return
+
+        # Start with the first join: anchor JOIN dim[0]
+        dim0, rel0 = joinable_dims[0]
+        current_join = etree.Element("relation", attrib={
+            "join": "inner",
+            "type": "join",
+        })
+        etree.SubElement(current_join, "relation", attrib={
+            "name": anchor.physical_name,
+            "table": f"[Extract].[{anchor.physical_name}]",
+            "type": "table",
+        })
+        etree.SubElement(current_join, "relation", attrib={
+            "name": dim0.physical_name,
+            "table": f"[Extract].[{dim0.physical_name}]",
+            "type": "table",
+        })
+        l_keys = rel0.left_keys if rel0.left_table == anchor.name else rel0.right_keys
+        r_keys = rel0.right_keys if rel0.left_table == anchor.name else rel0.left_keys
+        clause = etree.SubElement(current_join, "clause", attrib={"type": "join"})
+        expr = etree.SubElement(clause, "expression", attrib={"op": "="})
+        etree.SubElement(expr, "expression", attrib={
+            "op": f"[{anchor.physical_name}].[{l_keys[0]}]",
+        })
+        etree.SubElement(expr, "expression", attrib={
+            "op": f"[{dim0.physical_name}].[{r_keys[0]}]",
+        })
+
+        # Wrap each subsequent dim as an outer join
+        for dim, rel in joinable_dims[1:]:
+            outer_join = etree.Element("relation", attrib={
+                "join": "inner",
+                "type": "join",
+            })
+            outer_join.append(current_join)
+            etree.SubElement(outer_join, "relation", attrib={
+                "name": dim.physical_name,
+                "table": f"[Extract].[{dim.physical_name}]",
+                "type": "table",
+            })
+            l_keys = rel.left_keys if rel.left_table == anchor.name else rel.right_keys
+            r_keys = rel.right_keys if rel.left_table == anchor.name else rel.left_keys
+            clause = etree.SubElement(outer_join, "clause", attrib={"type": "join"})
+            expr = etree.SubElement(clause, "expression", attrib={"op": "="})
+            etree.SubElement(expr, "expression", attrib={
+                "op": f"[{anchor.physical_name}].[{l_keys[0]}]",
+            })
+            etree.SubElement(expr, "expression", attrib={
+                "op": f"[{dim.physical_name}].[{r_keys[0]}]",
+            })
+            current_join = outer_join
+
+        # Attach the complete join tree to conn
+        conn.append(current_join)
+
+    def _emit_window(self, parent, name: str, is_dashboard: bool = False, is_active: bool = False):
+        """Emit a schema-valid <window> element with all required XSD children."""
         window = etree.SubElement(parent, "window", attrib={
             "class": "dashboard" if is_dashboard else "worksheet",
             "name": name,
         })
+        if is_dashboard:
+            viewpoints = etree.SubElement(window, "viewpoints")
+            etree.SubElement(viewpoints, "viewpoint", attrib={"name": name})
+            etree.SubElement(window, "active", attrib={"name": name})
+            etree.SubElement(window, "simple-id", attrib={
+                "uuid": "{" + str(uuid.uuid4()).upper() + "}",
+            })
+        else:
+            cards = etree.SubElement(window, "cards")
+            edge_left = etree.SubElement(cards, "edge", attrib={"name": "left"})
+            strip_left = etree.SubElement(edge_left, "strip", attrib={"size": "160"})
+            etree.SubElement(strip_left, "card", attrib={"type": "pages"})
+            etree.SubElement(strip_left, "card", attrib={"type": "filters"})
+            etree.SubElement(strip_left, "card", attrib={"type": "marks"})
+            etree.SubElement(window, "viewpoint", attrib={"name": name})
+            etree.SubElement(window, "simple-id", attrib={
+                "uuid": "{" + str(uuid.uuid4()).upper() + "}",
+            })
 
     # ── Path rewriting (ADR-023) ────────────────────────────────
 

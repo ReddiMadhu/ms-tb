@@ -316,21 +316,50 @@ class SemanticAgent:
         Detects blocked types: training, extreme, relationship, derived elements,
         prompt-in-condition, and semi-additive facts.
         """
-        detail = obj.mstr_definition or await self.mstr.get_metric(obj.mstr_id)
+        # Always fetch via dedicated Model API to get expression tree
+        # (the cached mstr_definition from discovery often lacks expressions)
+        detail = None
+        try:
+            detail = await self.mstr.get_metric(obj.mstr_id)
+        except Exception as e:
+            logger.warning("Could not fetch metric %s via Model API: %s", obj.mstr_id, e)
+
+        # Fallback to cached definition
+        if not detail or not isinstance(detail, dict):
+            detail = obj.mstr_definition or {}
         if not isinstance(detail, dict):
             detail = {}
 
-        # Expression AST
+        # Some MSTR APIs wrap the metric definition under "information" key
+        # or return the metric info at the top level
+        metric_info = detail.get("information", {})
+        if not metric_info:
+            metric_info = detail
+
+        # Expression AST — try multiple known locations
+        expression_ast = None
+        expression_text = None
+
         expression = detail.get("expression")
         if isinstance(expression, dict):
             expression_ast = expression.get("tree", expression.get("tokens"))
             expression_text = expression.get("text")
+
+            # If no text, try to build from tokens
+            if not expression_text and expression.get("tokens"):
+                tokens = expression["tokens"]
+                if isinstance(tokens, list):
+                    text_parts = []
+                    for tok in tokens:
+                        if isinstance(tok, dict):
+                            val = tok.get("value", tok.get("name", ""))
+                            if val:
+                                text_parts.append(str(val))
+                    if text_parts:
+                        expression_text = " ".join(text_parts)
         elif isinstance(expression, str):
             expression_ast = None
             expression_text = expression
-        else:
-            expression_ast = None
-            expression_text = None
 
         # Dimensionality (dimty)
         dimty = detail.get("dimty", detail.get("dimensionality"))

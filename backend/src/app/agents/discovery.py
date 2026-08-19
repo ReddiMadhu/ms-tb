@@ -256,6 +256,9 @@ class DiscoveryAgent:
         )
         if dossier_obj and dataset_ids:
             dossier_obj.dependency_ids = dataset_ids
+            # Store the full dossier definition (including chapters/pages/visualizations)
+            # for downstream visual extraction during IR compilation
+            dossier_obj.mstr_definition = definition
             self.db.commit()
 
         for ds in datasets:

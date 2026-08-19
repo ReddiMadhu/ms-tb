@@ -112,7 +112,7 @@ class Issue(Base):
 
     id = Column(String, primary_key=True, default=_uuid)
     job_id = Column(String, ForeignKey("jobs.id"), nullable=False)
-    object_id = Column(String, ForeignKey("objects.id"))
+    object_id = Column(String)
 
     severity = Column(String, nullable=False)
     category = Column(String, nullable=False)
