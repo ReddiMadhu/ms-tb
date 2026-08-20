@@ -826,58 +826,7 @@ export default function NewJobPage() {
               </div>
             </div>
 
-            <div style={{ display: 'grid', gap: 14 }}>
-              <div style={{
-                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                padding: '14px 16px', borderRadius: 'var(--radius-sm)', background: 'var(--field)'
-              }}>
-                <div>
-                  <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--ink)' }}>Auto-Publish to Production</div>
-                  <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>Only promotes when 4-gate scorecard exceeds threshold</div>
-                </div>
-                <input
-                  type="checkbox"
-                  checked={form.auto_publish}
-                  onChange={e => setForm({ ...form, auto_publish: e.target.checked })}
-                  style={{ accentColor: 'var(--primary)', width: 18, height: 18, cursor: 'pointer' }}
-                  id="auto-publish"
-                />
-              </div>
 
-              <div className="input-group">
-                <label className="input-label" style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>Numeric Parity Gate Threshold (ADR-030)</span>
-                  <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--primary)', fontWeight: 600 }}>
-                    {(form.numeric_threshold * 100).toFixed(0)}%
-                  </span>
-                </label>
-                <input
-                  type="range"
-                  min="0.90"
-                  max="1.0"
-                  step="0.01"
-                  value={form.numeric_threshold}
-                  onChange={e => setForm({ ...form, numeric_threshold: parseFloat(e.target.value) })}
-                  style={{ accentColor: 'var(--primary)', width: '100%', cursor: 'pointer' }}
-                />
-              </div>
-            </div>
-
-            <div style={{
-              background: 'var(--primary-tint)',
-              border: '1px solid var(--primary-tint-strong)',
-              borderRadius: 'var(--radius-md)',
-              padding: 16,
-              display: 'flex', gap: 12
-            }}>
-              <ShieldCheck size={20} style={{ color: 'var(--primary)', flexShrink: 0, marginTop: 2 }} />
-              <div>
-                <p style={{ fontSize: 13, fontWeight: 600, color: 'var(--primary)' }}>Production Write-Lock Guaranteed (ADR-029)</p>
-                <p style={{ fontSize: 12, color: 'var(--ink-2)', marginTop: 4, lineHeight: 1.5 }}>
-                  All artifacts will be emitted to <code style={{ fontFamily: 'var(--font-mono)' }}>_migration_staging</code> first. Production project <strong>{form.tableau_target_project}</strong> will only be updated if all 4 validation gates pass.
-                </p>
-              </div>
-            </div>
 
             {apiError && (
               <div className="inline-banner error">

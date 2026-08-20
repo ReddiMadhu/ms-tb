@@ -491,8 +491,8 @@ class TableauEmitterAgent:
         d_name_lower = dash_spec.name.lower()
 
         if "campaign overview" in d_name_lower:
-            # 3 zones: Top banner (ARTICLES), Bottom-Left (Top 5 LM), Bottom-Right (Top 5 LM (2))
-            top_sheet = next((ws for ws in valid_worksheets if "article" in ws.name.lower()), None)
+            # 3 zones: Top banner KPI (ARTICLES 18%), Bottom-Left (Top 5 LM 82%), Bottom-Right (Top 5 LM (2) 82%)
+            top_sheet = next((ws for ws in valid_worksheets if "article" in ws.name.lower() and "detail" not in ws.name.lower()), None)
             left_sheet = next((ws for ws in valid_worksheets if ws != top_sheet and "(2)" not in ws.name), None)
             right_sheet = next((ws for ws in valid_worksheets if ws != top_sheet and ws != left_sheet), None)
 
@@ -500,21 +500,21 @@ class TableauEmitterAgent:
             if top_sheet:
                 placed += 1
                 etree.SubElement(root_zone, "zone", attrib={
-                    "h": "35000", "id": str(placed + 1), "name": top_sheet.name, "w": "100000", "x": "0", "y": "0",
+                    "h": "18000", "id": str(placed + 1), "name": top_sheet.name, "w": "100000", "x": "0", "y": "0",
                 })
             if left_sheet:
                 placed += 1
                 etree.SubElement(root_zone, "zone", attrib={
-                    "h": "65000", "id": str(placed + 1), "name": left_sheet.name, "w": "50000", "x": "0", "y": "35000",
+                    "h": "82000", "id": str(placed + 1), "name": left_sheet.name, "w": "50000", "x": "0", "y": "18000",
                 })
             if right_sheet:
                 placed += 1
                 etree.SubElement(root_zone, "zone", attrib={
-                    "h": "65000", "id": str(placed + 1), "name": right_sheet.name, "w": "50000", "x": "50000", "y": "35000",
+                    "h": "82000", "id": str(placed + 1), "name": right_sheet.name, "w": "50000", "x": "50000", "y": "18000",
                 })
 
         elif "article analysis" in d_name_lower:
-            # 4 KPI cards on top, stacked bar in middle, data grid at bottom
+            # 4 KPI cards on top (18%), stacked bar in middle (42%), data grid at bottom (40%)
             kpis = [ws for ws in valid_worksheets if any(k in ws.name.lower() for k in ["click", "search", "visit", "social"])]
             middle = next((ws for ws in valid_worksheets if "source" in ws.name.lower()), None)
             bottom = next((ws for ws in valid_worksheets if "detail" in ws.name.lower()), None)
@@ -531,13 +531,13 @@ class TableauEmitterAgent:
             if middle:
                 placed += 1
                 etree.SubElement(root_zone, "zone", attrib={
-                    "h": "47000", "id": str(placed + 1), "name": middle.name, "w": "100000", "x": "0", "y": "18000",
+                    "h": "42000", "id": str(placed + 1), "name": middle.name, "w": "100000", "x": "0", "y": "18000",
                 })
             # Bottom detail grid
             if bottom:
                 placed += 1
                 etree.SubElement(root_zone, "zone", attrib={
-                    "h": "35000", "id": str(placed + 1), "name": bottom.name, "w": "100000", "x": "0", "y": "65000",
+                    "h": "40000", "id": str(placed + 1), "name": bottom.name, "w": "100000", "x": "0", "y": "60000",
                 })
 
         else:
@@ -580,7 +580,8 @@ class TableauEmitterAgent:
             if dash_spec and getattr(dash_spec, "worksheets", None):
                 for ws_name in dash_spec.worksheets:
                     vp = etree.SubElement(viewpoints, "viewpoint", attrib={"name": ws_name})
-                    zoom_type = "fit-width" if "source" in ws_name.lower() else "entire-view"
+                    is_kpi = any(k in ws_name.lower() for k in ["paid click", "direct visit", "social media", "times search"]) or ws_name.upper() == "ARTICLES"
+                    zoom_type = "entire-view" if is_kpi else "fit-width"
                     etree.SubElement(vp, "zoom", attrib={"type": zoom_type})
             active_el = etree.SubElement(window, "active")
             active_el.set("id", "-1")
@@ -592,7 +593,8 @@ class TableauEmitterAgent:
             etree.SubElement(strip_left, "card", attrib={"type": "filters"})
             etree.SubElement(strip_left, "card", attrib={"type": "marks"})
             vp = etree.SubElement(window, "viewpoint", attrib={"name": name})
-            zoom_type = "fit-width" if "source" in name.lower() else "entire-view"
+            is_kpi = any(k in name.lower() for k in ["paid click", "direct visit", "social media", "times search"]) or name.upper() == "ARTICLES"
+            zoom_type = "entire-view" if is_kpi else "fit-width"
             etree.SubElement(vp, "zoom", attrib={"type": zoom_type})
 
     # ── Path rewriting (ADR-023) ────────────────────────────────
@@ -602,11 +604,7 @@ class TableauEmitterAgent:
         content = twb_path.read_text(encoding="utf-8")
 
         for domain, abs_path in hyper_paths.items():
-            if self.target_env == "staging":
-                new_path = f"_migration_staging/Datasources/{domain}"
-            else:
-                new_path = f"Data/Extracts/{domain}.hyper"
-
+            new_path = f"Data/Extracts/{domain}.hyper"
             content = content.replace(abs_path, new_path)
 
             # Record rewrite
@@ -614,7 +612,7 @@ class TableauEmitterAgent:
                 id=str(uuid.uuid4()),
                 job_id=self.job.id,
                 ir_datasource_id=domain,
-                staging_path=f"_migration_staging/Datasources/{domain}",
+                staging_path=f"Data/Extracts/{domain}.hyper",
                 production_path=f"Data/Extracts/{domain}.hyper",
             )
             self.db.add(rewrite)

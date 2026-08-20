@@ -68,19 +68,17 @@ export const StageDetailPanel: React.FC<StageDetailPanelProps> = ({
       case 'GRAPH':
         return { label: 'View Lineage Explorer', to: `/jobs/${jobId}/lineage` };
       case 'SEMANTIC':
-        return { label: 'Inspect Semantic Model', to: `/jobs/${jobId}/semantic` };
       case 'IR_COMPILE':
       case 'AI_TRANSLATE':
-        return { label: 'Inspect Logic & Calculations', to: `/jobs/${jobId}/logic` };
+        return { label: 'Inspect Calculation Logic Conversion', to: `/jobs/${jobId}/logic` };
       case 'VIZ':
       case 'WORKBOOK_EMIT_STAGING':
-        return { label: 'View Dashboard Inventory', to: `/jobs/${jobId}/dashboards` };
+        return { label: 'View Visual Conversion Report', to: `/jobs/${jobId}/dashboards` };
       case 'STATIC_VALIDATE':
-        return { label: 'Open Validation Center', to: `/jobs/${jobId}/validation` };
       case 'REPORT':
       case 'DATASOURCE_EMIT':
       case 'HYPER_BUILD':
-        return { label: 'View Export Center', to: `/jobs/${jobId}/exports` };
+        return { label: 'View Publish & Export Center', to: `/jobs/${jobId}/exports` };
       default:
         return null;
     }

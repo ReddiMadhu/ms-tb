@@ -66,7 +66,6 @@ export const PipelineStepper: React.FC<PipelineStepperProps> = ({
                   )}
                 </div>
                 <span className="pipeline-step-label">{phase.title}</span>
-                <span className="pipeline-step-sub">{phase.stageIds.length} stages</span>
               </button>
 
               {!isLast && (

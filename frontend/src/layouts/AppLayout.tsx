@@ -61,22 +61,14 @@ export default function AppLayout() {
         parts.push({ label: 'Object Catalog', to: `/jobs/${jobId}/objects` });
       } else if (path.includes('/lineage')) {
         parts.push({ label: 'Lineage Explorer', to: `/jobs/${jobId}/lineage` });
-      } else if (path.includes('/semantic')) {
-        parts.push({ label: 'Semantic Model', to: `/jobs/${jobId}/semantic` });
-      } else if (path.includes('/logic')) {
-        parts.push({ label: 'Logic & Calculations', to: `/jobs/${jobId}/logic` });
-      } else if (path.includes('/validation')) {
-        parts.push({ label: 'Validation Center', to: `/jobs/${jobId}/validation` });
-      } else if (path.includes('/review')) {
-        parts.push({ label: 'Issue Center', to: `/jobs/${jobId}/review` });
+      } else if (path.includes('/logic') || path.includes('/semantic')) {
+        parts.push({ label: 'Calculation Logic Conversion', to: `/jobs/${jobId}/logic` });
       } else if (path.includes('/dashboards')) {
-        parts.push({ label: 'Dashboard Inventory', to: `/jobs/${jobId}/dashboards` });
-      } else if (path.includes('/exports')) {
-        parts.push({ label: 'Export Center', to: `/jobs/${jobId}/exports` });
+        parts.push({ label: 'Visual Conversion Report', to: `/jobs/${jobId}/dashboards` });
+      } else if (path.includes('/exports') || path.includes('/review') || path.includes('/report')) {
+        parts.push({ label: 'Publish & Export Center', to: `/jobs/${jobId}/exports` });
       } else if (path.includes('/audit')) {
         parts.push({ label: 'Audit Trail', to: `/jobs/${jobId}/audit` });
-      } else if (path.includes('/report')) {
-        parts.push({ label: 'Migration Report', to: `/jobs/${jobId}/report` });
       }
     }
 
@@ -95,16 +87,16 @@ export default function AppLayout() {
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
-            padding: '16px 14px',
+            padding: '4px 14px',
             borderBottom: '1px solid var(--line)',
-            marginBottom: '12px',
+            marginBottom: '6px',
           }}
         >
           <Link to="/" style={{ textDecoration: 'none', display: 'flex', alignItems: 'center' }}>
             <div className="sidebar-logo-icon sidebar-brand-icon">M</div>
             {!sidebarCollapsed && (
               <div className="sidebar-header-text" style={{ marginLeft: 8 }}>
-                <div className="sidebar-logo-text">MSTR → Tableau</div>
+                <div className="sidebar-logo-text">MicroStrategy → Tableau</div>
                 <div style={{ fontSize: 10, color: 'var(--ink-3)', fontWeight: 500 }}>
                   Control Center
                 </div>

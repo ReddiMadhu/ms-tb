@@ -144,7 +144,7 @@ export default function Dashboard() {
       </div>
 
       {/* ── KPI Row ─────────────────────────────────────────────── */}
-      <div className="kpi-grid">
+      <div className="kpi-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))' }}>
         <KpiCard
           title="Total Migration Jobs"
           value={totalJobs}
@@ -153,25 +153,11 @@ export default function Dashboard() {
           accentColor="var(--primary)"
         />
         <KpiCard
-          title="Active In-Flight"
-          value={activeJobs}
-          subtitle="Currently analyzing or compiling"
-          icon={<Radio size={20} />}
-          accentColor="var(--blue)"
-        />
-        <KpiCard
           title="Completed & Verified"
           value={completedJobs}
           subtitle="Ready for production publish"
           icon={<CheckCircle2 size={20} />}
           accentColor="var(--green)"
-        />
-        <KpiCard
-          title="Action / Review Needed"
-          value={reviewRequired}
-          subtitle="Ambiguity or validation warnings"
-          icon={<AlertTriangle size={20} />}
-          accentColor="var(--yellow)"
         />
       </div>
 
@@ -187,7 +173,7 @@ export default function Dashboard() {
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          {['all', 'active', 'completed', 'review'].map((f) => (
+          {['all', 'active', 'completed'].map((f) => (
             <button
               key={f}
               onClick={() => setStatusFilter(f)}
@@ -207,9 +193,7 @@ export default function Dashboard() {
             >
               {f === 'all'
                 ? 'All Migrations'
-                : f === 'review'
-                  ? 'Needs Review'
-                  : `${f} Jobs`}
+                : `${f} Jobs`}
             </button>
           ))}
         </div>
@@ -273,7 +257,6 @@ export default function Dashboard() {
                 <th>Current Stage</th>
                 <th>Objects Progress</th>
                 <th>Confidence</th>
-                <th>Review Queue</th>
                 <th>Created</th>
                 <th style={{ textAlign: 'right' }}>Actions</th>
               </tr>
@@ -367,29 +350,6 @@ export default function Dashboard() {
                         </span>
                       ) : (
                         <span style={{ fontSize: '0.75rem', color: 'var(--ink-3)' }}>—</span>
-                      )}
-                    </td>
-
-                    <td>
-                      {job.review_queue_count && job.review_queue_count > 0 ? (
-                        <span
-                          style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '4px',
-                            padding: '2px 8px',
-                            borderRadius: 'var(--radius-full)',
-                            background: 'var(--yellow-tint)',
-                            color: 'var(--yellow)',
-                            fontSize: '0.75rem',
-                            fontWeight: 700,
-                          }}
-                        >
-                          <AlertTriangle size={12} />
-                          <span>{job.review_queue_count} pending</span>
-                        </span>
-                      ) : (
-                        <span style={{ fontSize: '0.75rem', color: 'var(--ink-3)' }}>0 flags</span>
                       )}
                     </td>
 

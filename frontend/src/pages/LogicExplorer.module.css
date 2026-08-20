@@ -1,0 +1,429 @@
+.container {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  width: 100%;
+  max-width: 1440px;
+  margin: 0 auto;
+}
+
+/* ── KPI Grid ── */
+.kpiGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.85rem;
+}
+
+.kpiCard {
+  background: var(--surface);
+  border: 1px solid var(--border-subtle, var(--line));
+  border-radius: 8px;
+  padding: 0.85rem 1rem;
+  display: flex;
+  flex-direction: column;
+}
+
+.kpiLabel {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ink-3);
+  margin-bottom: 0.25rem;
+  font-weight: 600;
+}
+
+.kpiValue {
+  font-size: 1.4rem;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+/* ── Toolbar & Tabs ── */
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.tabGroup {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.tabBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  color: var(--ink-2);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  padding: 0.5rem 0.85rem;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.tabBtn:hover {
+  background: var(--surface-hover, rgba(255, 255, 255, 0.05));
+  color: var(--ink);
+}
+
+.tabBtnActive {
+  background: var(--blue-tint, rgba(0, 168, 204, 0.12));
+  border-color: var(--blue, #00a8cc);
+  color: var(--blue, #00a8cc);
+}
+
+.badgeCount {
+  background: var(--line);
+  color: var(--ink-2);
+  font-size: 0.6875rem;
+  padding: 2px 6px;
+  border-radius: 10px;
+}
+
+.tabBtnActive .badgeCount {
+  background: var(--blue-tint, rgba(0, 168, 204, 0.25));
+  color: var(--blue, #00a8cc);
+}
+
+.filterControls {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.searchBox {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: var(--surface-alt, #0d1117);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.4rem 0.75rem;
+  width: 260px;
+}
+
+.searchBox input {
+  background: transparent;
+  border: none;
+  color: var(--ink);
+  outline: none;
+  font-size: 0.8125rem;
+  width: 100%;
+}
+
+.filterBox {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: var(--surface-alt, #0d1117);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.4rem 0.75rem;
+}
+
+.filterBox select {
+  background: transparent;
+  border: none;
+  color: var(--ink);
+  outline: none;
+  font-size: 0.8125rem;
+  cursor: pointer;
+}
+
+/* ── Conversion Card List ── */
+.cardsList {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.conversionCard {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  transition: border-color 0.15s ease;
+}
+
+.conversionCard:hover {
+  border-color: var(--blue, #00a8cc);
+}
+
+.cardHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-alt, rgba(0, 0, 0, 0.1));
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.cardTitleGroup {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.cardFieldTitle {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.formulaTypeBadge {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: var(--primary-tint, rgba(99, 102, 241, 0.12));
+  color: var(--primary, #6366f1);
+  border: 1px solid var(--primary, rgba(99, 102, 241, 0.25));
+}
+
+.methodBadge {
+  font-size: 0.6875rem;
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: var(--green-tint, rgba(34, 197, 94, 0.12));
+  color: var(--green, #22c55e);
+  border: 1px solid var(--green, rgba(34, 197, 94, 0.25));
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.datasourceBadge {
+  font-size: 0.6875rem;
+  color: var(--ink-3);
+}
+
+.statusBadgeValid {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--green, #22c55e);
+}
+
+.statusBadgeWarn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--yellow, #eab308);
+}
+
+/* ── Side-by-Side Code Grid ── */
+.sideBySideGrid {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: stretch;
+  gap: 0.75rem;
+  padding: 1rem;
+}
+
+@media (max-width: 900px) {
+  .sideBySideGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.codeColumn {
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-alt, #0d1117);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.codeColumnHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.4rem 0.75rem;
+  background: var(--surface, rgba(255, 255, 255, 0.02));
+  border-bottom: 1px solid var(--line);
+}
+
+.codeColumnTitleSource {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--blue, #00a8cc);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.codeColumnTitleTarget {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--green, #22c55e);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.copyBtn {
+  background: transparent;
+  border: none;
+  color: var(--ink-3);
+  font-size: 0.75rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  transition: all 0.15s ease;
+}
+
+.copyBtn:hover {
+  color: var(--ink);
+  background: var(--surface, rgba(255, 255, 255, 0.08));
+}
+
+.codeBlock {
+  margin: 0;
+  padding: 0.85rem 1rem;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: var(--ink);
+  white-space: pre-wrap;
+  word-break: break-word;
+  flex: 1;
+}
+
+.codeBlockTarget {
+  color: var(--green-text, #a7f3d0);
+  background: rgba(34, 197, 94, 0.03);
+}
+
+.centerArrowDivider {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  color: var(--ink-3);
+  padding: 0 4px;
+}
+
+.arrowLabel {
+  font-size: 0.625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--ink-3);
+}
+
+.explanationFooter {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  padding: 0.6rem 1rem;
+  background: var(--primary-tint, rgba(99, 102, 241, 0.05));
+  border-top: 1px solid var(--line);
+  font-size: 0.78125rem;
+  color: var(--ink-2);
+}
+
+.sparkleIcon {
+  color: var(--primary, #6366f1);
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+/* ── Full Script Card ── */
+.fullSqlCard {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.fullSqlHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 1.25rem;
+  background: var(--surface-alt, rgba(0, 0, 0, 0.1));
+  border-bottom: 1px solid var(--line);
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.fullSqlTitle {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--ink);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.actionBtnGroup {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.actionBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  color: var(--ink);
+  font-size: 0.78125rem;
+  font-weight: 500;
+  padding: 0.45rem 0.85rem;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.actionBtn:hover {
+  background: var(--surface-hover, rgba(255, 255, 255, 0.08));
+  border-color: var(--blue, #00a8cc);
+}
+
+.fullSqlCodeBlock {
+  margin: 0;
+  padding: 1.25rem;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  color: var(--ink);
+  background: var(--surface-alt, #0d1117);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 550px;
+  overflow-y: auto;
+}
+
+.emptyState {
+  padding: 3rem 1rem;
+  text-align: center;
+  color: var(--ink-3);
+  font-size: 0.875rem;
+}

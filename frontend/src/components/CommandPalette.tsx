@@ -134,16 +134,6 @@ export const CommandPalette: React.FC = () => {
           },
         },
         {
-          id: 'job-review',
-          label: 'Issue Center & Ambiguity Queue',
-          category: 'Current Job',
-          icon: <AlertTriangle size={16} />,
-          action: () => {
-            navigate(`/jobs/${activeJobId}/review`);
-            setCommandPaletteOpen(false);
-          },
-        },
-        {
           id: 'job-lineage',
           label: 'Lineage & Cross-Reference Explorer',
           category: 'Current Job',
@@ -153,19 +143,10 @@ export const CommandPalette: React.FC = () => {
             setCommandPaletteOpen(false);
           },
         },
-        {
-          id: 'job-semantic',
-          label: 'Semantic Data Model',
-          category: 'Current Job',
-          icon: <Layers size={16} />,
-          action: () => {
-            navigate(`/jobs/${activeJobId}/semantic`);
-            setCommandPaletteOpen(false);
-          },
-        },
+
         {
           id: 'job-logic',
-          label: 'Logic & Calculation Translator',
+          label: 'Calculation Logic Conversion',
           category: 'Current Job',
           icon: <Code size={16} />,
           action: () => {
@@ -175,7 +156,7 @@ export const CommandPalette: React.FC = () => {
         },
         {
           id: 'job-dashboards',
-          label: 'Dashboard Inventory',
+          label: 'Visual Conversion Report',
           category: 'Current Job',
           icon: <LayoutDashboard size={16} />,
           action: () => {
@@ -185,7 +166,7 @@ export const CommandPalette: React.FC = () => {
         },
         {
           id: 'job-exports',
-          label: 'Export Center & Artifacts',
+          label: 'Publish & Export Center',
           category: 'Current Job',
           icon: <Download size={16} />,
           action: () => {
@@ -200,16 +181,6 @@ export const CommandPalette: React.FC = () => {
           icon: <History size={16} />,
           action: () => {
             navigate(`/jobs/${activeJobId}/audit`);
-            setCommandPaletteOpen(false);
-          },
-        },
-        {
-          id: 'job-report',
-          label: 'Generate Migration Report',
-          category: 'Current Job',
-          icon: <FileText size={16} />,
-          action: () => {
-            navigate(`/jobs/${activeJobId}/report`);
             setCommandPaletteOpen(false);
           },
         },
