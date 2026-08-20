@@ -211,14 +211,30 @@ class VisualizationAgent:
 
             vis_clean = (getattr(visual, "name", "") or "").strip().lower()
 
-            # Try to match a specific measure by visual name
+            # Try to match a specific measure by visual name.
+            # Priority: exact name > exact caption > substring (excluding Percent/Ratio mismatch)
             matched_measure = None
+            # Pass 1: Exact match
             for m in measures:
                 m_name = (getattr(m, "name", "") or "").lower()
                 m_cap = (getattr(m, "caption", "") or "").lower()
-                if vis_clean and (m_name == vis_clean or m_cap == vis_clean or m_name in vis_clean or vis_clean in m_name):
+                if vis_clean and (m_name == vis_clean or m_cap == vis_clean):
                     matched_measure = m
                     break
+
+            # Pass 2: Substring match, but skip Percent/Ratio variants when visual doesn't say "percent"
+            if not matched_measure:
+                vis_wants_percent = vis_clean.startswith("percent")
+                for m in measures:
+                    m_name = (getattr(m, "name", "") or "").lower()
+                    m_cap = (getattr(m, "caption", "") or "").lower()
+                    is_percent_measure = m_name.startswith("percent") or "ratio" in m_name
+                    # Skip percent measures when visual isn't asking for percent
+                    if not vis_wants_percent and is_percent_measure:
+                        continue
+                    if vis_clean and (m_name in vis_clean or vis_clean in m_name or m_cap in vis_clean or vis_clean in m_cap):
+                        matched_measure = m
+                        break
 
             if not matched_measure and measures:
                 matched_measure = measures[0]

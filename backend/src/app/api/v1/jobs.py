@@ -151,6 +151,24 @@ async def list_artifacts(job_id: str, db: Session = Depends(get_db)):
     }
 
 
+@router.get("/{job_id}/viz-plan")
+async def get_viz_plan(job_id: str, db: Session = Depends(get_db)):
+    """GET /jobs/{id}/viz-plan — Return the generated viz_plan (worksheets + dashboards)."""
+    import json as _json
+
+    job = db.query(Job).filter(Job.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+
+    viz_path = Path(settings.artifacts_dir) / job_id / "viz_plan.json"
+    if not viz_path.exists():
+        return {"worksheets": [], "dashboards": []}
+
+    data = _json.loads(viz_path.read_text(encoding="utf-8"))
+    return data
+
+
+
 @router.get("/{job_id}/download/{artifact_id}")
 async def download_artifact(job_id: str, artifact_id: str, db: Session = Depends(get_db)):
     """GET /jobs/{id}/download/{artifact_id} — Download a .twbx / .hyper / .tds artifact."""

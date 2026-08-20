@@ -413,6 +413,32 @@ export const api = {
   listArtifacts: (jobId: string) =>
     fetchJSON<{ artifacts: ArtifactItem[]; total: number }>(`/jobs/${jobId}/artifacts`),
 
+  getVizPlan: (jobId: string) =>
+    fetchJSON<{
+      worksheets: Array<{
+        id: string;
+        name: string;
+        datasource_ref: string;
+        mark_type: string;
+        rows: Array<{ name: string; field_type: string }>;
+        columns: Array<{ name: string; field_type: string }>;
+        color?: { name: string; field_type: string } | null;
+        size?: { name: string; field_type: string } | null;
+        label?: { name: string; field_type: string } | null;
+        detail: Array<{ name: string; field_type: string }>;
+        filters: Array<{ field_name: string }>;
+        tooltip_fields: Array<{ name: string; field_type: string }>;
+        is_failed: boolean;
+      }>;
+      dashboards: Array<{
+        id: string;
+        name: string;
+        worksheets: string[];
+        layout: string;
+        filters: any[];
+      }>;
+    }>(`/jobs/${jobId}/viz-plan`),
+
   // 6. Object Catalog & Detail
   listObjects: (
     jobId: string,

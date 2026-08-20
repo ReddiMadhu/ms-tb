@@ -71,65 +71,73 @@ export default function Objects() {
   const cubeName = cubes[0]?.name || 'A.Marketing_Campaign_AI_M';
   const dossierName = dossiers[0]?.name || 'Marketing Campaigns';
 
-  // ── Dynamically Synthesize Worksheets from Real Objects ────────
+
+  const [vizPlanWorksheets, setVizPlanWorksheets] = useState<any[]>([]);
+
+  useEffect(() => {
+    if (!jobId) return;
+    api.getVizPlan(jobId)
+      .then((res) => {
+        setVizPlanWorksheets(res.worksheets || []);
+      })
+      .catch(() => setVizPlanWorksheets([]));
+  }, [jobId]);
+
+  // ── Dynamically map real viz_plan worksheets to WorksheetVisual[] ────────
   const worksheets: WorksheetVisual[] = useMemo(() => {
-    const attrNames = attributes.map(a => a.name);
-    const metricNames = metrics.map(m => m.name);
-    const calcRatioNames = metrics.filter(m => m.name.toLowerCase().includes('percent') || m.name.toLowerCase().includes('ratio')).map(m => m.name);
+    if (vizPlanWorksheets.length === 0) return [];
 
-    const ws1Name = `${dossierName} Overview`;
-    const ws2Name = `Traffic & Search Trends`;
-    const ws3Name = `Article Conversion Matrix`;
+    const markTypeToChartType: Record<string, string> = {
+      bar: 'Bar Chart',
+      line: 'Line Chart',
+      text: 'Text / KPI',
+      area: 'Area Chart',
+      circle: 'Scatter Plot',
+      square: 'Heat Map',
+      pie: 'Pie Chart',
+      gantt_bar: 'Gantt Chart',
+      polygon: 'Map',
+      shape: 'Shape Chart',
+    };
 
-    return [
-      {
-        name: ws1Name,
-        title: ws1Name,
-        type: 'Bar Chart',
-        mark_type: 'Bar',
-        datasource_name: cubeName,
-        columns: attrNames.length >= 2 ? [`[${attrNames[3] || attrNames[0]}]`, `[${attrNames[1]}]`] : ['[Campaign]', '[Article Type]'],
-        rows: metricNames.length >= 2 ? [`SUM([${metricNames[0]}])`, `SUM([${metricNames[2] || metricNames[1]}])`] : ['SUM([Direct Visits])', 'SUM([Paid Clicks])'],
-        dimensions: attrNames.slice(0, 3).map(a => `[${a}]`),
-        measures: metricNames.slice(0, 4).map(m => `[${m}]`),
-        filters: attrNames.length > 4 ? [`[${attrNames[4]}] Active`] : [],
-        encodings: [
-          { channel: 'color', field_name: attrNames[3] ? `[${attrNames[3]}]` : '[Campaign]' },
-        ],
-        used_calculated_fields: calcRatioNames.slice(0, 2).map(c => `[${c}]`),
-      },
-      {
-        name: ws2Name,
-        title: ws2Name,
-        type: 'Line Chart',
-        mark_type: 'Line',
-        datasource_name: cubeName,
-        columns: attrNames.find(a => a.toLowerCase().includes('date')) ? [`[Date] (Continuous)`] : [`[${attrNames[0] || 'Date'}]`],
-        rows: metricNames.length >= 7 ? [`SUM([${metricNames[6]}])`, `SUM([${metricNames[5]}])`] : ['SUM([Views])', 'SUM([Times Searched])'],
-        dimensions: attrNames.slice(2, 5).map(a => `[${a}]`),
-        measures: metricNames.slice(4, 7).map(m => `[${m}]`),
-        filters: [],
-        encodings: [
-          { channel: 'color', field_name: 'Measure Names' },
-        ],
-        used_calculated_fields: calcRatioNames.slice(1, 3).map(c => `[${c}]`),
-      },
-      {
-        name: ws3Name,
-        title: ws3Name,
-        type: 'Table Grid',
-        mark_type: 'Text',
-        datasource_name: cubeName,
-        columns: attrNames.length >= 6 ? [`[${attrNames[5]}]`] : ['[Published in]'],
-        rows: attrNames.length >= 2 ? [`[${attrNames[0]}]`, `[${attrNames[6] || attrNames[1]}]`] : ['[Article Name]', '[Short Article Name]'],
-        dimensions: attrNames.slice(0, 3).map(a => `[${a}]`),
-        measures: metricNames.slice(0, 5).map(m => `[${m}]`),
-        filters: [],
-        encodings: [],
-        used_calculated_fields: calcRatioNames.slice(2, 4).map(c => `[${c}]`),
-      },
-    ];
-  }, [dossiers, attributes, metrics, cubeName, dossierName]);
+    return vizPlanWorksheets.map((ws) => {
+      const chartType = markTypeToChartType[ws.mark_type] || ws.mark_type;
+      const rowFields = (ws.rows || []).map((r: any) => `[${r.name}]`);
+      const colFields = (ws.columns || []).map((c: any) => `[${c.name}]`);
+      const dimFields = [...(ws.rows || []), ...(ws.columns || [])].filter((f: any) => f.field_type === 'dimension').map((f: any) => `[${f.name}]`);
+      const measFields = [...(ws.rows || []), ...(ws.columns || [])].filter((f: any) => f.field_type === 'measure').map((f: any) => `[${f.name}]`);
+      if (ws.label) measFields.push(`[${ws.label.name}]`);
+      if (ws.color?.field_type === 'dimension') dimFields.push(`[${ws.color.name}]`);
+
+      const encodings: { channel: string; field_name: string }[] = [];
+      if (ws.color) encodings.push({ channel: 'color', field_name: `[${ws.color.name}]` });
+      if (ws.size) encodings.push({ channel: 'size', field_name: `[${ws.size.name}]` });
+      if (ws.label) encodings.push({ channel: 'label', field_name: `[${ws.label.name}]` });
+
+      const filterFields = (ws.filters || []).map((f: any) => f.field_name || f.name || '');
+
+      const usedCalcs = measFields.filter(f => {
+        const cleaned = f.replace(/[[\]]/g, '');
+        return cleaned.toLowerCase().includes('percent') || cleaned.toLowerCase().includes('ratio');
+      });
+
+      return {
+        name: ws.name,
+        title: ws.name,
+        type: chartType,
+        mark_type: ws.mark_type.charAt(0).toUpperCase() + ws.mark_type.slice(1),
+        datasource_name: ws.datasource_ref || cubeName,
+        columns: colFields.length > 0 ? colFields : (ws.label ? [`[${ws.label.name}]`] : []),
+        rows: rowFields,
+        dimensions: dimFields,
+        measures: [...new Set(measFields)],
+        filters: filterFields,
+        encodings,
+        used_calculated_fields: usedCalcs,
+      };
+    });
+  }, [vizPlanWorksheets, cubeName]);
+
 
   // ── Dynamically Synthesize Calculated Fields from Real DB Metrics ─
   const calcFields: CalcField[] = useMemo(() => {

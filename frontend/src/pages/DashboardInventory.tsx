@@ -281,59 +281,97 @@ export default function DashboardInventory() {
 
   useEffect(() => {
     if (!jobId) return;
+
+    // Fetch dossier name from objects
     api.listObjects(jobId)
       .then((res) => {
         const objects = res.objects || [];
         const dossier = objects.find((o) => o.type_name === 'dossier');
         if (dossier) setDossierName(dossier.name);
+      })
+      .catch(() => {});
 
-        const reports = objects.filter((o) => o.type_name === 'report');
-        if (reports.length > 0) {
-          const dynamicCards = reports.map((r, idx) => {
-            const chartType = idx % 4 === 0 ? 'Bar Chart' : idx % 4 === 1 ? 'Line Chart' : idx % 4 === 2 ? 'Cross-Tab Grid' : 'Donut / Pie Chart';
-            const markType = chartType === 'Bar Chart' ? 'Bar' : chartType === 'Line Chart' ? 'Line' : chartType === 'Cross-Tab Grid' ? 'Text / Table' : 'Pie';
+    // Fetch real worksheet cards from viz-plan
+    api.getVizPlan(jobId)
+      .then((vizPlan) => {
+        const ws = vizPlan.worksheets || [];
+        if (ws.length === 0) return;
 
-            return {
-              id: r.id || r.mstr_id || `viz-dyn-${idx}`,
-              worksheetName: r.name,
-              chartType,
-              status: 'SUCCESS' as const,
-              mstr: {
-                type: `MicroStrategy ${chartType} (Native Visual)`,
-                columns: ['[Dimension 1]'],
-                rows: ['SUM([Metric 1])'],
-                color: '[Dimension 1]',
-                tooltip: ['[Dimension 1]', 'SUM([Metric 1])'],
-                filters: ['[Active] = True'],
-                metrics: ['Metric 1'],
-                attributes: ['Dimension 1'],
-              },
-              tableau: {
-                markType,
-                columnsShelf: ['[Dimension 1]'],
-                rowsShelf: ['SUM([Metric 1])'],
-                colorEncoding: '[Dimension 1]',
-                labelEncoding: 'SUM([Metric 1])',
-                tooltipShelf: ['[Dimension 1]', 'SUM([Metric 1])'],
-                filtersShelf: ['[Active] = True'],
-                worksheetXmlSpec: `<worksheet name="${r.name}">\n  <table>\n    <rows>[federated].[sum:Metric 1:qk]</rows>\n    <cols>[federated].[none:Dimension 1:nk]</cols>\n  </table>\n</worksheet>`,
-              },
-              validation: {
-                visualTypePreserved: true,
-                fieldsCorrectlyMapped: true,
-                filtersPreserved: true,
-                aggregationsPreserved: true,
-                formattingPreserved: true,
-                sortOrderPreserved: true,
-                tooltipPreserved: true,
-                calculationsPreserved: true,
-              },
-            };
-          });
+        const markToChart: Record<string, string> = {
+          bar: 'Bar Chart',
+          line: 'Line Chart',
+          text: 'Text / KPI Card',
+          area: 'Area Chart',
+          circle: 'Scatter Plot',
+          square: 'Heat Map',
+          pie: 'Pie Chart',
+          gantt_bar: 'Gantt Chart',
+          polygon: 'Map',
+        };
 
-          if (dynamicCards.length > 0) {
-            setVisuals(dynamicCards);
-          }
+        const dynamicCards: ConversionCardItem[] = ws.map((w) => {
+          const chartType = markToChart[w.mark_type] || w.mark_type;
+          const rowNames = (w.rows || []).map((r: any) => `[${r.name}]`);
+          const colNames = (w.columns || []).map((c: any) => `[${c.name}]`);
+          const colorField = w.color ? `[${w.color.name}]` : null;
+          const labelField = w.label ? `[${w.label.name}]` : null;
+          const measNames = [...(w.rows || []), ...(w.columns || [])]
+            .filter((f: any) => f.field_type === 'measure')
+            .map((f: any) => f.name);
+          if (w.label) measNames.push(w.label.name);
+          const attrNames = [...(w.rows || []), ...(w.columns || [])]
+            .filter((f: any) => f.field_type === 'dimension')
+            .map((f: any) => f.name);
+          if (w.color?.field_type === 'dimension') attrNames.push(w.color.name);
+
+          const filterStrs = (w.filters || []).map((f: any) => `[${f.field_name}]`);
+
+          const mstrType = chartType.includes('Bar') ? 'Vertical Bar (Standard Clustered)' :
+            chartType.includes('Line') ? 'Line Chart (Time Series Trend)' :
+            chartType.includes('KPI') ? 'KPI Card (Single Metric)' :
+            chartType.includes('Grid') || chartType.includes('Text') ? 'Cross-Tab Grid' :
+            `MicroStrategy ${chartType} (Native Visual)`;
+
+          return {
+            id: w.id,
+            worksheetName: w.name,
+            chartType,
+            status: (w.is_failed ? 'MANUAL_REVIEW' : 'SUCCESS') as 'SUCCESS' | 'MANUAL_REVIEW',
+            mstr: {
+              type: mstrType,
+              columns: colNames.length > 0 ? colNames : (labelField ? [labelField] : ['—']),
+              rows: rowNames.length > 0 ? rowNames : ['—'],
+              color: colorField || '—',
+              tooltip: [...colNames, ...rowNames].slice(0, 3),
+              filters: filterStrs,
+              metrics: [...new Set(measNames)],
+              attributes: [...new Set(attrNames)],
+            },
+            tableau: {
+              markType: w.mark_type.charAt(0).toUpperCase() + w.mark_type.slice(1),
+              columnsShelf: colNames.length > 0 ? colNames : (labelField ? [labelField] : ['—']),
+              rowsShelf: rowNames.length > 0 ? rowNames : ['—'],
+              colorEncoding: colorField || '—',
+              labelEncoding: labelField || '—',
+              tooltipShelf: [...colNames, ...rowNames].slice(0, 3),
+              filtersShelf: filterStrs,
+              worksheetXmlSpec: `<worksheet name="${w.name}">\n  <table>\n    <rows>${rowNames.join('')}</rows>\n    <cols>${colNames.join('')}</cols>\n  </table>\n</worksheet>`,
+            },
+            validation: {
+              visualTypePreserved: true,
+              fieldsCorrectlyMapped: !w.is_failed,
+              filtersPreserved: true,
+              aggregationsPreserved: true,
+              formattingPreserved: true,
+              sortOrderPreserved: true,
+              tooltipPreserved: true,
+              calculationsPreserved: true,
+            },
+          };
+        });
+
+        if (dynamicCards.length > 0) {
+          setVisuals(dynamicCards);
         }
       })
       .catch(() => {
