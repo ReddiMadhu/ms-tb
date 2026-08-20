@@ -65,8 +65,8 @@ export default function NewJobPage() {
     mstr_base_url: !form.mstr_base_url.trim()
       ? 'MSTR Server URL is required'
       : !form.mstr_base_url.startsWith('http://') && !form.mstr_base_url.startsWith('https://')
-      ? 'URL must start with http:// or https://'
-      : null,
+        ? 'URL must start with http:// or https://'
+        : null,
     mstr_username: !form.mstr_username.trim() ? 'MSTR Username is required' : null,
     mstr_password: !form.mstr_password ? 'MSTR Password is required' : null,
     mstr_project_id: null,  // Not mandatory — user selects from discovered list
@@ -696,7 +696,7 @@ export default function NewJobPage() {
                           type="checkbox"
                           className="dossier-checkbox"
                           checked={isSelected}
-                          onChange={() => {}} // Handled by container
+                          onChange={() => { }} // Handled by container
                         />
                         <div className="dossier-info">
                           <div className="dossier-name">{dossier.name}</div>

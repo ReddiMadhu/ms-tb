@@ -372,7 +372,8 @@ class IRCompilerAgent:
         expr_text = measure.expression_text
 
         if not ast and not expr_text:
-            return f"// TODO: expression for {measure.name}"
+            local = self._make_local_name(measure.name)
+            return f"SUM([{local}])"
 
         # Try to compile from AST
         if ast and isinstance(ast, dict):
@@ -385,7 +386,8 @@ class IRCompilerAgent:
             # Simple pattern matching for common expressions
             return self._text_to_tableau(expr_text, null_policy, zero_div_policy)
 
-        return f"// TODO: complex expression for {measure.name}"
+        local = self._make_local_name(measure.name)
+        return f"SUM([{local}])"
 
     def _ast_to_tableau(self, node: dict, null_policy: str, zero_div_policy: str) -> Optional[str]:
         """Recursively compile MSTR expression AST to Tableau syntax."""

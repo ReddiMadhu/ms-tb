@@ -1,241 +1,428 @@
-import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { motion } from 'framer-motion';
-import {
-  Plus, Activity, CheckCircle2, AlertTriangle, Zap,
-  ArrowUpRight, RefreshCw, Layers, Sparkles
-} from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 import { api, type Job } from '../api';
+import {
+  FolderKanban,
+  CheckCircle2,
+  AlertTriangle,
+  Clock,
+  ArrowRight,
+  Plus,
+  Radio,
+  ExternalLink,
+  Layers,
+  ArrowRightLeft,
+  ShieldCheck,
+  RefreshCw,
+  Search,
+} from 'lucide-react';
+import { StatusBadge } from '../components/ui/StatusBadge';
+import { KpiCard } from '../components/ui/KpiCard';
+import { EmptyState } from '../components/ui/EmptyState';
 
-const STATUS_BADGE: Record<string, { cls: string; label: string }> = {
-  PENDING: { cls: 'badge-neutral', label: 'Pending' },
-  RUNNING: { cls: 'badge-info', label: 'Running' },
-  DISCOVERY: { cls: 'badge-info', label: 'Discovery' },
-  GRAPH: { cls: 'badge-info', label: 'Graph' },
-  SEMANTIC: { cls: 'badge-info', label: 'Semantic' },
-  COMPLETE: { cls: 'badge-success', label: 'Complete' },
-  FAILED: { cls: 'badge-danger', label: 'Failed' },
-  CANCELLED: { cls: 'badge-neutral', label: 'Cancelled' },
-};
-
-function getStatusBadge(status: string) {
-  return STATUS_BADGE[status] || STATUS_BADGE['RUNNING'] || { cls: 'badge-info', label: status };
-}
-
-function timeAgo(date: string) {
-  const d = new Date(date);
-  const now = new Date();
-  const diff = Math.floor((now.getTime() - d.getTime()) / 1000);
-  if (diff < 60) return `${diff}s ago`;
-  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-  return `${Math.floor(diff / 86400)}d ago`;
-}
-
-export default function DashboardPage() {
+export default function Dashboard() {
+  const navigate = useNavigate();
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
+  const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState('all');
 
-  useEffect(() => {
-    loadJobs();
-    const interval = setInterval(loadJobs, 10_000);
-    return () => clearInterval(interval);
-  }, []);
-
-  async function loadJobs(showRefreshing = false) {
-    if (showRefreshing) setRefreshing(true);
-    try {
-      const res = await api.listJobs();
-      setJobs(res.jobs || []);
-    } catch (e) {
-      console.error('Failed to load jobs:', e);
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  }
-
-  const stats = {
-    total: jobs.length,
-    active: jobs.filter(j => !['COMPLETE', 'FAILED', 'CANCELLED'].includes(j.status)).length,
-    complete: jobs.filter(j => j.status === 'COMPLETE').length,
-    failed: jobs.filter(j => j.status === 'FAILED').length,
+  const fetchJobs = () => {
+    api.listJobs()
+      .then((res) => {
+        setJobs(res.jobs || []);
+        setLoading(false);
+      })
+      .catch(() => {
+        setLoading(false);
+      });
   };
 
+  const activeJobs = jobs.filter((j) => ['RUNNING', 'PENDING', 'PROMOTING'].includes(j.status)).length;
+
+  useEffect(() => {
+    fetchJobs();
+
+    // If jobs are loaded and none are currently active in-flight, stop background polling
+    if (jobs.length > 0 && activeJobs === 0) {
+      return;
+    }
+
+    const interval = setInterval(fetchJobs, 6000);
+    return () => clearInterval(interval);
+  }, [activeJobs, jobs.length]);
+
+  // Compute KPI metrics
+  const totalJobs = jobs.length;
+  const completedJobs = jobs.filter((j) => ['COMPLETE', 'COMPLETE_WITH_WARNINGS', 'PUBLISHED'].includes(j.status)).length;
+  const reviewRequired = jobs.filter((j) => j.status === 'NEEDS_REVIEW' || (j.review_queue_count && j.review_queue_count > 0)).length;
+
+  const filteredJobs = jobs.filter((j) => {
+    const matchesSearch =
+      j.name.toLowerCase().includes(search.toLowerCase()) ||
+      j.id.toLowerCase().includes(search.toLowerCase()) ||
+      (j.mstr_project_id && j.mstr_project_id.toLowerCase().includes(search.toLowerCase()));
+
+    const matchesStatus =
+      statusFilter === 'all' ||
+      (statusFilter === 'active' && ['RUNNING', 'PENDING', 'PROMOTING'].includes(j.status)) ||
+      (statusFilter === 'completed' && ['COMPLETE', 'COMPLETE_WITH_WARNINGS', 'PUBLISHED'].includes(j.status)) ||
+      (statusFilter === 'review' && (j.status === 'NEEDS_REVIEW' || (j.review_queue_count && j.review_queue_count > 0))) ||
+      j.status.toLowerCase() === statusFilter.toLowerCase();
+
+    return matchesSearch && matchesStatus;
+  });
+
   return (
-    <>
-      <div className="page-header-gradient">
-        <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-          <div>
-            <h1 className="page-title">Migration Dashboard</h1>
-            <p className="page-subtitle">Enterprise MicroStrategy to Tableau Server & Cloud pipeline orchestrator</p>
-          </div>
-          <div style={{ display: 'flex', gap: 10 }}>
-            <button
-              type="button"
-              className="btn btn-secondary btn-icon"
-              onClick={() => loadJobs(true)}
-              title="Refresh jobs"
-            >
-              <RefreshCw size={14} className={refreshing ? 'spinner' : ''} />
-            </button>
-            <Link to="/jobs/new" className="btn btn-primary">
-              <Plus size={15} />
-              New Migration Job
-            </Link>
-          </div>
+    <div style={{ maxWidth: '1440px', margin: '0 auto' }}>
+      {/* ── Page Header ─────────────────────────────────────────── */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          marginBottom: '24px',
+        }}
+      >
+        <div>
+          <h1
+            style={{
+              fontSize: '1.625rem',
+              fontWeight: 700,
+              color: 'var(--ink)',
+              letterSpacing: '-0.02em',
+              margin: 0,
+            }}
+          >
+            Migration Workspace
+          </h1>
+          <p
+            style={{
+              fontSize: '0.875rem',
+              color: 'var(--ink-2)',
+              marginTop: '4px',
+            }}
+          >
+            Enterprise MicroStrategy to Tableau migration control center and observability hub
+          </p>
         </div>
 
-        {/* ── Stat cards ──────────────────────────────────── */}
-        <div className="stat-grid">
-          <motion.div
-            className="stat-card"
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0, duration: 0.4, ease: [0.23, 1, 0.32, 1] }}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <button
+            type="button"
+            onClick={fetchJobs}
+            className="btn btn-secondary"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '8px 14px',
+              fontSize: '0.8125rem',
+            }}
+            title="Refresh jobs"
           >
-            <span className="stat-label"><Activity size={14} /> Total Jobs</span>
-            <span className="stat-value">{stats.total}</span>
-          </motion.div>
-          <motion.div
-            className="stat-card"
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.06, duration: 0.4, ease: [0.23, 1, 0.32, 1] }}
+            <RefreshCw size={14} className={loading ? 'spin-icon' : ''} />
+            <span>Refresh</span>
+          </button>
+
+          <Link
+            to="/jobs/new"
+            className="btn btn-primary"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '8px 16px',
+              fontSize: '0.8125rem',
+              fontWeight: 600,
+            }}
           >
-            <span className="stat-label"><Zap size={14} /> Active In-Flight</span>
-            <span className="stat-value" style={{ color: stats.active > 0 ? 'var(--primary)' : undefined }}>
-              {stats.active}
-            </span>
-          </motion.div>
-          <motion.div
-            className="stat-card"
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.12, duration: 0.4, ease: [0.23, 1, 0.32, 1] }}
-          >
-            <span className="stat-label"><CheckCircle2 size={14} /> Complete & Verified</span>
-            <span className="stat-value" style={{ color: stats.complete > 0 ? 'var(--green)' : undefined }}>
-              {stats.complete}
-            </span>
-          </motion.div>
-          <motion.div
-            className="stat-card"
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.18, duration: 0.4, ease: [0.23, 1, 0.32, 1] }}
-          >
-            <span className="stat-label"><AlertTriangle size={14} /> Needs Attention</span>
-            <span className="stat-value" style={{ color: stats.failed > 0 ? 'var(--red)' : undefined }}>
-              {stats.failed}
-            </span>
-          </motion.div>
+            <Plus size={16} />
+            <span>New Migration</span>
+          </Link>
         </div>
       </div>
 
-      {/* ── Jobs table ──────────────────────────────────── */}
-      <motion.div
-        className="card"
-        initial={{ opacity: 0, y: 12 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.2, duration: 0.5, ease: [0.23, 1, 0.32, 1] }}
+      {/* ── KPI Row ─────────────────────────────────────────────── */}
+      <div className="kpi-grid">
+        <KpiCard
+          title="Total Migration Jobs"
+          value={totalJobs}
+          subtitle="Registered migration workflows"
+          icon={<FolderKanban size={20} />}
+          accentColor="var(--primary)"
+        />
+        <KpiCard
+          title="Active In-Flight"
+          value={activeJobs}
+          subtitle="Currently analyzing or compiling"
+          icon={<Radio size={20} />}
+          accentColor="var(--blue)"
+        />
+        <KpiCard
+          title="Completed & Verified"
+          value={completedJobs}
+          subtitle="Ready for production publish"
+          icon={<CheckCircle2 size={20} />}
+          accentColor="var(--green)"
+        />
+        <KpiCard
+          title="Action / Review Needed"
+          value={reviewRequired}
+          subtitle="Ambiguity or validation warnings"
+          icon={<AlertTriangle size={20} />}
+          accentColor="var(--yellow)"
+        />
+      </div>
+
+      {/* ── Filter & Search Bar ─────────────────────────────────── */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: '16px',
+          marginBottom: '16px',
+          flexWrap: 'wrap',
+        }}
       >
-        <div className="card-header">
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <Layers size={15} style={{ color: 'var(--primary)' }} />
-            <span className="card-title">Recent Migration Jobs</span>
-          </div>
-          <span style={{ fontSize: 12, color: 'var(--ink-3)', fontFamily: 'var(--font-mono)' }}>
-            {jobs.length} total
-          </span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          {['all', 'active', 'completed', 'review'].map((f) => (
+            <button
+              key={f}
+              onClick={() => setStatusFilter(f)}
+              style={{
+                padding: '6px 14px',
+                borderRadius: 'var(--radius-full)',
+                border: '1px solid',
+                borderColor: statusFilter === f ? 'var(--primary)' : 'var(--line)',
+                background: statusFilter === f ? 'var(--primary-tint)' : 'var(--surface)',
+                color: statusFilter === f ? 'var(--primary)' : 'var(--ink-2)',
+                fontSize: '0.8125rem',
+                fontWeight: statusFilter === f ? 600 : 500,
+                cursor: 'pointer',
+                textTransform: 'capitalize',
+                transition: 'all 0.15s ease',
+              }}
+            >
+              {f === 'all'
+                ? 'All Migrations'
+                : f === 'review'
+                  ? 'Needs Review'
+                  : `${f} Jobs`}
+            </button>
+          ))}
         </div>
 
-        {loading ? (
-          <div style={{ padding: 20 }}>
-            {[1, 2, 3].map(i => (
-              <div key={i} className="shimmer" style={{ height: 44, marginBottom: 10, borderRadius: 'var(--radius-sm)' }} />
-            ))}
-          </div>
-        ) : jobs.length === 0 ? (
-          <div className="empty-state">
-            <Zap className="empty-state-icon" />
-            <p className="empty-state-title">No migration jobs yet</p>
-            <p className="empty-state-desc">
-              Connect your MicroStrategy environment, scan dossiers, and start your first automated migration pipeline.
-            </p>
-            <Link to="/jobs/new" className="btn btn-primary" style={{ marginTop: 20 }}>
-              <Plus size={15} /> Create First Migration Job
-            </Link>
-          </div>
-        ) : (
-          <div style={{ overflowX: 'auto' }}>
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>Job Name</th>
-                  <th>Status</th>
-                  <th>Stage</th>
-                  <th>Progress</th>
-                  <th>Created</th>
-                  <th>Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {jobs.map((job, i) => {
-                  const badge = getStatusBadge(job.status);
-                  const progress = job.objects_total && job.objects_processed
-                    ? Math.round((job.objects_processed / job.objects_total) * 100)
-                    : (job.status === 'COMPLETE' ? 100 : 0);
+        <div className="search-bar" style={{ minWidth: '280px' }}>
+          <Search size={16} className="search-icon" />
+          <input
+            type="text"
+            className="input"
+            placeholder="Search by job name, ID, or project..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </div>
+      </div>
 
-                  return (
-                    <motion.tr
-                      key={job.id}
-                      initial={{ opacity: 0, x: -8 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      transition={{ delay: 0.2 + i * 0.03, duration: 0.35, ease: [0.23, 1, 0.32, 1] }}
-                    >
-                      <td>
-                        <Link to={`/jobs/${job.id}`} className="table-link" style={{ fontWeight: 600 }}>
-                          {job.name}
-                        </Link>
-                        <div style={{ fontSize: 11, color: 'var(--ink-3)', marginTop: 2 }}>
-                          Project: {job.mstr_project_id.slice(0, 12)}...
-                        </div>
-                      </td>
-                      <td>
-                        <span className={`badge ${badge.cls}`}>{badge.label}</span>
-                      </td>
-                      <td className="muted" style={{ fontSize: 12 }}>
-                        {job.current_stage || '—'}
-                      </td>
-                      <td style={{ minWidth: 140 }}>
-                        <div className="confidence-meter">
-                          <div className="confidence-bar">
+      {/* ── Jobs Table / Empty State ────────────────────────────── */}
+      {loading && jobs.length === 0 ? (
+        <div
+          style={{
+            padding: '60px',
+            textAlign: 'center',
+            background: 'var(--surface)',
+            borderRadius: 'var(--radius-lg)',
+            border: '1px solid var(--line)',
+          }}
+        >
+          <RefreshCw size={28} className="spin-icon" color="var(--primary)" />
+          <p style={{ marginTop: '14px', color: 'var(--ink-2)', fontSize: '0.875rem' }}>
+            Loading migration catalog...
+          </p>
+        </div>
+      ) : filteredJobs.length === 0 ? (
+        <EmptyState
+          icon={FolderKanban}
+          title={search ? 'No matching migrations found' : 'No migration jobs yet'}
+          description={
+            search
+              ? `No jobs match your search query "${search}". Try clearing your filters.`
+              : 'Connect your MicroStrategy environment and discover dossiers to start your first automated migration.'
+          }
+          actionLabel={search ? 'Clear Filters' : 'Launch New Migration'}
+          onAction={search ? () => { setSearch(''); setStatusFilter('all'); } : () => navigate('/jobs/new')}
+          actionIcon={<Plus size={16} />}
+        />
+      ) : (
+        <div
+          style={{
+            background: 'var(--surface)',
+            border: '1px solid var(--line)',
+            borderRadius: 'var(--radius-lg)',
+            overflow: 'hidden',
+            boxShadow: 'var(--shadow-card)',
+          }}
+        >
+          <table className="log-table">
+            <thead>
+              <tr>
+                <th>Migration Job</th>
+                <th>Status</th>
+                <th>Current Stage</th>
+                <th>Objects Progress</th>
+                <th>Confidence</th>
+                <th>Review Queue</th>
+                <th>Created</th>
+                <th style={{ textAlign: 'right' }}>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredJobs.map((job) => {
+                const totalObjs = job.progress?.objects_total || job.objects_total || 0;
+                const processedObjs = job.progress?.objects_processed || job.objects_processed || 0;
+                const confidence = job.validation?.structural_confidence;
+                const confidencePercent = confidence !== undefined ? Math.round(confidence * 100) : null;
+
+                return (
+                  <tr
+                    key={job.id}
+                    style={{ cursor: 'pointer' }}
+                    onClick={() => navigate(`/jobs/${job.id}`)}
+                  >
+                    <td>
+                      <div style={{ fontWeight: 600, color: 'var(--ink)' }}>{job.name}</div>
+                      <div
+                        style={{
+                          fontSize: '0.6875rem',
+                          color: 'var(--ink-3)',
+                          fontFamily: 'var(--font-mono)',
+                          marginTop: '2px',
+                        }}
+                      >
+                        {job.id}
+                      </div>
+                    </td>
+
+                    <td>
+                      <StatusBadge status={job.status} size="sm" />
+                    </td>
+
+                    <td>
+                      <span className="tool-chip" style={{ fontSize: '0.6875rem' }}>
+                        {job.progress?.current_stage || job.current_stage || 'DISCOVERY'}
+                      </span>
+                    </td>
+
+                    <td>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                        <span
+                          style={{
+                            fontSize: '0.75rem',
+                            fontFamily: 'var(--font-mono)',
+                            color: 'var(--ink)',
+                          }}
+                        >
+                          {processedObjs} / {totalObjs > 0 ? totalObjs : '—'}
+                        </span>
+                        {totalObjs > 0 && (
+                          <div
+                            style={{
+                              width: '100px',
+                              height: '4px',
+                              background: 'var(--field)',
+                              borderRadius: 'var(--radius-full)',
+                              overflow: 'hidden',
+                            }}
+                          >
                             <div
-                              className={`confidence-fill ${job.status === 'COMPLETE' ? 'green' : 'primary'}`}
-                              style={{ width: `${progress}%` }}
+                              style={{
+                                height: '100%',
+                                width: `${Math.min(100, Math.round((processedObjs / totalObjs) * 100))}%`,
+                                background: 'var(--primary)',
+                              }}
                             />
                           </div>
-                          <span className="confidence-label">{progress}%</span>
-                        </div>
-                      </td>
-                      <td className="muted" style={{ fontSize: 12 }}>
-                        {timeAgo(job.created_at)}
-                      </td>
-                      <td>
-                        <Link to={`/jobs/${job.id}`} className="btn btn-ghost btn-sm btn-icon" title="View Job Details">
-                          <ArrowUpRight size={15} />
-                        </Link>
-                      </td>
-                    </motion.tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </motion.div>
-    </>
+                        )}
+                      </div>
+                    </td>
+
+                    <td>
+                      {confidencePercent !== null ? (
+                        <span
+                          style={{
+                            fontFamily: 'var(--font-mono)',
+                            fontSize: '0.8125rem',
+                            fontWeight: 700,
+                            color:
+                              confidencePercent >= 95
+                                ? 'var(--green)'
+                                : confidencePercent >= 85
+                                  ? 'var(--yellow)'
+                                  : 'var(--red)',
+                          }}
+                        >
+                          {confidencePercent}%
+                        </span>
+                      ) : (
+                        <span style={{ fontSize: '0.75rem', color: 'var(--ink-3)' }}>—</span>
+                      )}
+                    </td>
+
+                    <td>
+                      {job.review_queue_count && job.review_queue_count > 0 ? (
+                        <span
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '4px',
+                            padding: '2px 8px',
+                            borderRadius: 'var(--radius-full)',
+                            background: 'var(--yellow-tint)',
+                            color: 'var(--yellow)',
+                            fontSize: '0.75rem',
+                            fontWeight: 700,
+                          }}
+                        >
+                          <AlertTriangle size={12} />
+                          <span>{job.review_queue_count} pending</span>
+                        </span>
+                      ) : (
+                        <span style={{ fontSize: '0.75rem', color: 'var(--ink-3)' }}>0 flags</span>
+                      )}
+                    </td>
+
+                    <td style={{ fontSize: '0.75rem', color: 'var(--ink-2)' }}>
+                      {new Date(job.created_at).toLocaleDateString('en-US', {
+                        month: 'short',
+                        day: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}
+                    </td>
+
+                    <td style={{ textAlign: 'right' }}>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          navigate(`/jobs/${job.id}`);
+                        }}
+                        className="btn btn-ghost"
+                        style={{ padding: '6px' }}
+                        title="Open migration control center"
+                      >
+                        <ArrowRight size={16} />
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
   );
 }

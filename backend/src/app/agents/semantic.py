@@ -361,6 +361,10 @@ class SemanticAgent:
             expression_ast = None
             expression_text = expression
 
+        # Fallback to obj.expression_text or other known fields
+        if not expression_text:
+            expression_text = obj.expression_text or detail.get("formula") or detail.get("formulaText")
+
         # Dimensionality (dimty)
         dimty = detail.get("dimty", detail.get("dimensionality"))
 

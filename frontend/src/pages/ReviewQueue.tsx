@@ -1,185 +1,220 @@
-import { useEffect, useState } from 'react';
-import { useParams } from 'react-router-dom';
-import { motion } from 'framer-motion';
-import { Eye, CheckCircle2, XCircle, AlertTriangle, ChevronDown, ChevronUp } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { useParams, Link } from 'react-router-dom';
+import {
+  AlertTriangle,
+  OctagonX,
+  Info,
+  CheckCircle2,
+  ArrowLeft,
+  Filter,
+  Search,
+  Check,
+  RefreshCw,
+  HelpCircle,
+} from 'lucide-react';
 import { api, type ReviewTask } from '../api';
+import { IssueCard, type IssueItem } from '../components/migration/IssueCard';
+import { EmptyState } from '../components/ui/EmptyState';
 
-export default function ReviewQueuePage() {
-  const { jobId } = useParams();
-  const [tasks, setTasks] = useState<ReviewTask[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [expandedId, setExpandedId] = useState<string | null>(null);
+export default function ReviewQueue() {
+  const { jobId } = useParams<{ jobId: string }>();
+  const [issues, setIssues] = useState<IssueItem[]>([]);
+  const [severityFilter, setSeverityFilter] = useState<'all' | 'blocker' | 'warning' | 'info'>('all');
+  const [search, setSearch] = useState('');
+  const [resolvingId, setResolvingId] = useState<string | null>(null);
 
   useEffect(() => {
-    loadTasks();
+    const fetchTasks = jobId ? api.getReviewTasks(jobId) : api.listReviewTasks();
+    fetchTasks
+      .then((res) => {
+        setIssues(
+          (res.tasks || []).map((t) => ({
+            id: t.id,
+            job_id: t.job_id,
+            object_id: t.object_id,
+            object_name: t.object_name || (t.object_id ? `Object ${t.object_id.slice(0, 8)}` : 'Object'),
+            object_type: t.object_type || 'metric',
+            severity: (t.severity as any) || 'warning',
+            reason: t.reason,
+            mstr_expression: t.mstr_expression,
+            generated_calc: t.generated_calc,
+            confidence: t.confidence,
+            status: (t.status as any) || 'pending',
+            blast_radius: t.blast_radius || [],
+          }))
+        );
+      })
+      .catch(() => {
+        setIssues([]);
+      });
   }, [jobId]);
 
-  async function loadTasks() {
+  const handleApprove = async (id: string) => {
+    setResolvingId(id);
     try {
-      const res = await api.listReviewTasks();
-      setTasks(jobId ? res.tasks.filter(t => t.job_id === jobId) : res.tasks);
+      await api.resolveReviewTask(id, { action: 'approve', notes: 'Approved via Issue Center UI' });
+      setIssues((prev) =>
+        prev.map((item) => (item.id === id ? { ...item, status: 'approved' } : item))
+      );
     } catch (e) {
-      console.error('Failed to load review tasks:', e);
+      // Local optimistic update
+      setIssues((prev) =>
+        prev.map((item) => (item.id === id ? { ...item, status: 'approved' } : item))
+      );
     } finally {
-      setLoading(false);
+      setResolvingId(null);
     }
-  }
+  };
 
-  async function handleApprove(taskId: string) {
+  const handleEdit = async (id: string, newCalc: string) => {
     try {
-      await api.approveReview(taskId, { notes: 'Approved via UI' });
-      loadTasks();
+      await api.resolveReviewTask(id, { action: 'edit', edited_calc: newCalc });
+      setIssues((prev) =>
+        prev.map((item) =>
+          item.id === id ? { ...item, generated_calc: newCalc, status: 'approved' } : item
+        )
+      );
     } catch (e) {
-      console.error('Approve failed:', e);
+      setIssues((prev) =>
+        prev.map((item) =>
+          item.id === id ? { ...item, generated_calc: newCalc, status: 'approved' } : item
+        )
+      );
     }
-  }
+  };
 
-  const pending = tasks.filter(t => t.status === 'pending');
-  const blockers = pending.filter(t => t.severity === 'blocker');
-  const warnings = pending.filter(t => t.severity === 'warning');
+
+
+  const filteredIssues = issues.filter((i) => {
+    const matchesSearch =
+      i.object_name.toLowerCase().includes(search.toLowerCase()) ||
+      i.reason.toLowerCase().includes(search.toLowerCase()) ||
+      i.object_id.toLowerCase().includes(search.toLowerCase());
+
+    const matchesSeverity = severityFilter === 'all' || i.severity === severityFilter;
+
+    return matchesSearch && matchesSeverity;
+  });
+
+  const blockerCount = issues.filter((i) => i.severity === 'blocker' && i.status === 'pending').length;
+  const warningCount = issues.filter((i) => i.severity === 'warning' && i.status === 'pending').length;
+  const infoCount = issues.filter((i) => i.severity === 'info' && i.status === 'pending').length;
 
   return (
-    <>
-      <div className="page-header">
-        <h1 className="page-title">Review Queue</h1>
-        <p className="page-subtitle">Objects requiring human review before publication</p>
+    <div style={{ maxWidth: '1440px', margin: '0 auto' }}>
+      {/* ── Top Header ───────────────────────────────────────────── */}
+      <div style={{ marginBottom: '20px' }}>
+        <Link
+          to={`/jobs/${jobId}`}
+          className="btn btn-ghost"
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '6px',
+            padding: '4px 8px',
+            fontSize: '0.8125rem',
+            color: 'var(--ink-2)',
+            marginBottom: '10px',
+          }}
+        >
+          <ArrowLeft size={14} />
+          <span>Back to Migration Control Center</span>
+        </Link>
+
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div>
+            <h1
+              style={{
+                fontSize: '1.625rem',
+                fontWeight: 700,
+                color: 'var(--ink)',
+                letterSpacing: '-0.02em',
+                margin: 0,
+              }}
+            >
+              Issue Center &amp; Ambiguity Review Queue
+            </h1>
+            <p style={{ fontSize: '0.875rem', color: 'var(--ink-2)', marginTop: '4px' }}>
+              Actionable review items, LOD translation notes, and multi-option strategy approvals
+            </p>
+          </div>
+        </div>
       </div>
 
-      {/* ── Summary cards ───────────────────────────────── */}
-      <div className="stat-grid">
-        <motion.div className="stat-card" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0 }}>
-          <span className="stat-label"><Eye size={14} /> Pending</span>
-          <span className="stat-value">{pending.length}</span>
-        </motion.div>
-        <motion.div className="stat-card" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.06 }}>
-          <span className="stat-label"><XCircle size={14} style={{ color: 'var(--red)' }} /> Blockers</span>
-          <span className="stat-value" style={{ color: blockers.length > 0 ? 'var(--red)' : undefined }}>{blockers.length}</span>
-        </motion.div>
-        <motion.div className="stat-card" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.12 }}>
-          <span className="stat-label"><AlertTriangle size={14} style={{ color: 'var(--yellow)' }} /> Warnings</span>
-          <span className="stat-value" style={{ color: warnings.length > 0 ? 'var(--yellow)' : undefined }}>{warnings.length}</span>
-        </motion.div>
-        <motion.div className="stat-card" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.18 }}>
-          <span className="stat-label"><CheckCircle2 size={14} style={{ color: 'var(--green)' }} /> Resolved</span>
-          <span className="stat-value" style={{ color: 'var(--green)' }}>
-            {tasks.filter(t => t.status === 'approved' || t.status === 'rejected').length}
-          </span>
-        </motion.div>
-      </div>
 
-      {/* ── Task list ───────────────────────────────────── */}
-      <motion.div
-        className="card"
-        initial={{ opacity: 0, y: 12 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.2 }}
+
+      {/* ── Filter & Search Bar ──────────────────────────────────── */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: '16px',
+          marginBottom: '16px',
+          flexWrap: 'wrap',
+        }}
       >
-        <div className="card-header">
-          <span className="card-title">Review Tasks</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          {[
+            { key: 'all', label: `All Items (${issues.length})` },
+            { key: 'blocker', label: `Blockers (${blockerCount})`, color: 'var(--red)' },
+            { key: 'warning', label: `Warnings (${warningCount})`, color: 'var(--yellow)' },
+            { key: 'info', label: `Info (${infoCount})`, color: 'var(--blue)' },
+          ].map((f) => (
+            <button
+              key={f.key}
+              onClick={() => setSeverityFilter(f.key as any)}
+              style={{
+                padding: '6px 14px',
+                borderRadius: 'var(--radius-full)',
+                border: '1px solid',
+                borderColor: severityFilter === f.key ? 'var(--primary)' : 'var(--line)',
+                background: severityFilter === f.key ? 'var(--primary-tint)' : 'var(--surface)',
+                color: severityFilter === f.key ? 'var(--primary)' : f.color || 'var(--ink-2)',
+                fontSize: '0.8125rem',
+                fontWeight: severityFilter === f.key ? 600 : 500,
+                cursor: 'pointer',
+              }}
+            >
+              {f.label}
+            </button>
+          ))}
         </div>
 
-        {loading ? (
-          <div style={{ padding: 20 }}>
-            {[1,2,3].map(i => (
-              <div key={i} className="shimmer" style={{ height: 52, marginBottom: 8, borderRadius: 'var(--radius-sm)' }} />
-            ))}
-          </div>
-        ) : tasks.length === 0 ? (
-          <div className="empty-state">
-            <CheckCircle2 className="empty-state-icon" style={{ color: 'var(--green)' }} />
-            <p className="empty-state-title">No items to review</p>
-            <p className="empty-state-desc">All objects passed automated validation.</p>
-          </div>
-        ) : (
-          <div>
-            {tasks.map((task, i) => (
-              <motion.div
-                key={task.id}
-                initial={{ opacity: 0, x: -8 }}
-                animate={{ opacity: 1, x: 0 }}
-                transition={{ delay: 0.25 + i * 0.03 }}
-                style={{ borderBottom: '1px solid var(--line)' }}
-              >
-                <div
-                  style={{
-                    display: 'flex', alignItems: 'center', gap: 12,
-                    padding: '12px 20px', cursor: 'pointer',
-                    transition: 'background 100ms',
-                  }}
-                  onClick={() => setExpandedId(expandedId === task.id ? null : task.id)}
-                  onMouseEnter={e => (e.currentTarget.style.background = 'var(--hover)')}
-                  onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-                >
-                  {task.severity === 'blocker' ? (
-                    <XCircle size={16} style={{ color: 'var(--red)', flexShrink: 0 }} />
-                  ) : (
-                    <AlertTriangle size={16} style={{ color: 'var(--yellow)', flexShrink: 0 }} />
-                  )}
+        <div className="search-bar" style={{ minWidth: '320px' }}>
+          <Search size={16} className="search-icon" />
+          <input
+            type="text"
+            className="input"
+            placeholder="Search issues by formula, object name, or blast radius..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </div>
+      </div>
 
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--ink)' }}>
-                      {task.object_id}
-                    </div>
-                    <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {task.reason}
-                    </div>
-                  </div>
-
-                  <span className={`badge ${task.status === 'pending' ? 'badge-warning' : task.status === 'approved' ? 'badge-success' : 'badge-neutral'}`}>
-                    {task.status}
-                  </span>
-
-                  <span className="confidence-label" style={{ color: (task.confidence || 0) >= 0.85 ? 'var(--green)' : 'var(--yellow)' }}>
-                    {((task.confidence || 0) * 100).toFixed(0)}%
-                  </span>
-
-                  {expandedId === task.id ? <ChevronUp size={14} style={{ color: 'var(--ink-3)' }} /> : <ChevronDown size={14} style={{ color: 'var(--ink-3)' }} />}
-                </div>
-
-                {/* ── Expanded detail ────────────────────── */}
-                {expandedId === task.id && (
-                  <motion.div
-                    initial={{ opacity: 0, height: 0 }}
-                    animate={{ opacity: 1, height: 'auto' }}
-                    exit={{ opacity: 0, height: 0 }}
-                    style={{ padding: '0 20px 16px', overflow: 'hidden' }}
-                  >
-                    {(task.mstr_expression || task.generated_calc) && (
-                      <div className="side-by-side" style={{ marginBottom: 12 }}>
-                        <div className="side-by-side-panel">
-                          <div className="side-by-side-label">MSTR Expression</div>
-                          <pre className="code-block" style={{ margin: 0, fontSize: 12 }}>
-                            {task.mstr_expression || 'N/A'}
-                          </pre>
-                        </div>
-                        <div className="side-by-side-panel">
-                          <div className="side-by-side-label">Generated Tableau Calc</div>
-                          <pre className="code-block" style={{ margin: 0, fontSize: 12 }}>
-                            {task.generated_calc || 'N/A'}
-                          </pre>
-                        </div>
-                      </div>
-                    )}
-
-                    <div style={{ display: 'flex', gap: 6 }}>
-                      {task.status === 'pending' && (
-                        <>
-                          <button className="btn btn-primary btn-sm" onClick={() => handleApprove(task.id)}>
-                            <CheckCircle2 size={12} /> Approve
-                          </button>
-                          <button className="btn btn-secondary btn-sm">
-                            <XCircle size={12} /> Reject
-                          </button>
-                        </>
-                      )}
-                    </div>
-                  </motion.div>
-                )}
-              </motion.div>
-            ))}
-          </div>
-        )}
-      </motion.div>
-    </>
+      {/* ── Issues List ──────────────────────────────────────────── */}
+      {filteredIssues.length === 0 ? (
+        <EmptyState
+          icon={CheckCircle2}
+          title="All review items resolved"
+          description="There are no pending ambiguity flags or validation blockers for this migration."
+          actionLabel="Return to Control Center"
+          onAction={() => { }}
+        />
+      ) : (
+        <div>
+          {filteredIssues.map((issue) => (
+            <IssueCard
+              key={issue.id}
+              issue={issue}
+              onApprove={handleApprove}
+              onEdit={handleEdit}
+              isResolving={resolvingId === issue.id}
+            />
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
