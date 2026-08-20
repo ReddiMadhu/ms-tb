@@ -37,18 +37,29 @@ export default function DashboardInventory() {
     api.listObjects(jobId)
       .then((res) => {
         const dossiers = (res.objects || []).filter((o) => o.type_name === 'dossier' || o.type_name === 'report' || o.type_name === 'document');
-        const items: DashboardItem[] = dossiers.map((d, idx) => ({
-          id: d.id || `d-${idx}`,
-          name: d.name,
-          mstrPath: d.mstr_path || '/Shared Reports/',
-          chaptersCount: 3,
-          worksheetsCount: 8,
-          visualsCount: 12,
-          calculationsCount: d.dependencies?.length || 15,
-          filtersCount: 4,
-          status: d.status || 'published',
-          conversionPercent: d.confidence ? Math.round(d.confidence * 100) : 100,
-        }));
+        const items: DashboardItem[] = dossiers.map((d, idx) => {
+          const mstrDef = d.mstr_definition as any;
+          const irNode = d.ir_node as any;
+
+          const chapters = mstrDef?.chapters?.length || mstrDef?.pages?.length || irNode?.chapters?.length || (d.type_name === 'dossier' ? 1 : 0);
+          const visuals = mstrDef?.visualizations?.length || irNode?.views?.length || (d.type_name === 'dossier' ? 1 : 0);
+          const worksheets = irNode?.views?.length || visuals || 1;
+          const calcs = d.dependencies?.length || mstrDef?.metrics?.length || 0;
+          const filters = mstrDef?.filters?.length || mstrDef?.selectors?.length || 0;
+
+          return {
+            id: d.id || `d-${idx}`,
+            name: d.name,
+            mstrPath: d.mstr_path || '/Shared Reports/',
+            chaptersCount: chapters,
+            worksheetsCount: worksheets,
+            visualsCount: visuals,
+            calculationsCount: calcs,
+            filtersCount: filters,
+            status: d.status || 'discovered',
+            conversionPercent: d.confidence ? Math.round(d.confidence * 100) : (d.status === 'published' ? 100 : d.status === 'compiled' ? 95 : 85),
+          };
+        });
         setDashboards(items);
       })
       .catch(() => setDashboards([]));

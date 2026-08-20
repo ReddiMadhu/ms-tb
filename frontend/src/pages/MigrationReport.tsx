@@ -14,20 +14,42 @@ import {
   Layers,
   Code,
 } from 'lucide-react';
-import { api, type Job } from '../api';
+import { api, type Job, type MigrationObject } from '../api';
 import { ConfidenceCard } from '../components/migration/ConfidenceCard';
 import { ValidationScorecard } from '../components/validation/ValidationScorecard';
 
 export default function MigrationReport() {
   const { jobId } = useParams<{ jobId: string }>();
   const [job, setJob] = useState<Job | null>(null);
+  const [objects, setObjects] = useState<MigrationObject[]>([]);
 
   useEffect(() => {
     if (!jobId) return;
     api.getJob(jobId)
       .then((data) => setJob(data))
       .catch(() => { });
+
+    api.listObjects(jobId)
+      .then((res) => setObjects(res.objects || []))
+      .catch(() => setObjects([]));
   }, [jobId]);
+
+  const totalObjs = job?.progress?.objects_total || job?.objects_total || objects.length || 0;
+  const processedObjs = job?.progress?.objects_processed || job?.objects_processed || objects.length || 0;
+  const failedObjs = job?.progress?.objects_failed || job?.objects_failed || 0;
+  const isComplete = job?.status === 'COMPLETE' || job?.status === 'PUBLISHED';
+
+  const typeCounts: Record<string, { total: number; succeeded: number; failed: number }> = {};
+  objects.forEach((o) => {
+    const t = o.type_name || 'other';
+    if (!typeCounts[t]) typeCounts[t] = { total: 0, succeeded: 0, failed: 0 };
+    typeCounts[t].total += 1;
+    if (o.status === 'failed') {
+      typeCounts[t].failed += 1;
+    } else {
+      typeCounts[t].succeeded += 1;
+    }
+  });
 
   return (
     <div style={{ maxWidth: '1100px', margin: '0 auto', paddingBottom: '60px' }}>
@@ -83,21 +105,6 @@ export default function MigrationReport() {
               <Printer size={14} />
               <span>Print Report</span>
             </button>
-
-            <button
-              onClick={() => alert('Exporting signed PDF report package...')}
-              className="btn btn-primary"
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '6px',
-                padding: '8px 14px',
-                fontSize: '0.8125rem',
-              }}
-            >
-              <Download size={14} />
-              <span>Download PDF</span>
-            </button>
           </div>
         </div>
       </div>
@@ -136,13 +143,13 @@ export default function MigrationReport() {
               style={{
                 padding: '6px 12px',
                 borderRadius: 'var(--radius-full)',
-                background: 'var(--green-tint)',
-                color: 'var(--green)',
+                background: isComplete ? 'var(--green-tint)' : 'var(--blue-tint)',
+                color: isComplete ? 'var(--green)' : 'var(--blue)',
                 fontWeight: 700,
                 fontSize: '0.8125rem',
               }}
             >
-              100% Verified Production Parity
+              {isComplete ? '100% Verified Production Parity' : `Status: ${job?.status || 'In Progress'}`}
             </span>
           </div>
         </div>
@@ -154,7 +161,7 @@ export default function MigrationReport() {
           </h2>
           <p style={{ fontSize: '0.875rem', color: 'var(--ink-2)', lineHeight: 1.6, margin: 0 }}>
             This audit report validates the automated reverse-engineering and semantic reconstruction
-            of MicroStrategy business intelligence assets into Tableau Server 2024.2. All {job?.progress?.objects_total || job?.objects_total || 'discovered'} objects,
+            of MicroStrategy business intelligence assets into Tableau Server {job?.template_version || '2024.2'}. All {totalObjs} discovered objects,
             metrics, LOD expressions, underlying database relationship schemas, and worksheet visual
             charts have undergone multi-tier algorithmic validation and ground-truth parity comparison.
           </p>
@@ -178,10 +185,10 @@ export default function MigrationReport() {
                 Source Environment
               </div>
               <div style={{ fontSize: '1rem', fontWeight: 600, color: 'var(--ink)', marginTop: '4px' }}>
-                MicroStrategy Cloud Library (2024.0402)
+                {job?.mstr_version ? `MicroStrategy Library (${job.mstr_version})` : 'MicroStrategy Library'}
               </div>
               <div style={{ fontSize: '0.75rem', color: 'var(--ink-2)', marginTop: '4px' }}>
-                Project: {job?.mstr_project_id || 'Connected Project'}
+                Project: {job?.mstr_project_name || job?.mstr_project_id || 'Connected Project'}
               </div>
             </div>
 
@@ -197,10 +204,10 @@ export default function MigrationReport() {
                 Target Environment
               </div>
               <div style={{ fontSize: '1rem', fontWeight: 600, color: 'var(--ink)', marginTop: '4px' }}>
-                Tableau Server (2024.2)
+                Tableau Server ({job?.template_version || '2024.2'})
               </div>
               <div style={{ fontSize: '0.75rem', color: 'var(--ink-2)', marginTop: '4px' }}>
-                Target Project: Public Objects / Migrated Dashboards
+                Target Project: {job?.tableau_target_project || 'Migrated Dashboards'}
               </div>
             </div>
           </div>
@@ -211,7 +218,11 @@ export default function MigrationReport() {
           <h2 style={{ fontSize: '1.125rem', fontWeight: 700, color: 'var(--ink)', marginBottom: '16px' }}>
             3. Migration Confidence &amp; 4-Tier Promotion Gates
           </h2>
-          <ValidationScorecard autoPublishEligible={job?.status === 'COMPLETE' || job?.status === 'PUBLISHED'} totalBlockers={job?.progress?.objects_failed || 0} />
+          <ValidationScorecard
+            job={job}
+            autoPublishEligible={isComplete}
+            totalBlockers={failedObjs}
+          />
         </div>
 
         {/* Section 4: Object Migration Coverage */}
@@ -230,13 +241,29 @@ export default function MigrationReport() {
               </tr>
             </thead>
             <tbody>
-              <tr>
-                <td style={{ fontWeight: 600 }}>Discovered Migration Objects</td>
-                <td>{job?.progress?.objects_total || job?.objects_total || 0}</td>
-                <td>{job?.progress?.objects_succeeded || job?.objects_succeeded || job?.progress?.objects_processed || 0}</td>
-                <td>{job?.progress?.objects_failed || job?.objects_failed || 0}</td>
-                <td style={{ color: 'var(--green)', fontWeight: 600 }}>Verified</td>
-              </tr>
+              {Object.keys(typeCounts).length === 0 ? (
+                <tr>
+                  <td style={{ fontWeight: 600 }}>All Discovered Objects</td>
+                  <td>{totalObjs}</td>
+                  <td>{processedObjs - failedObjs}</td>
+                  <td>{failedObjs}</td>
+                  <td style={{ color: 'var(--green)', fontWeight: 600 }}>{isComplete ? 'Verified' : 'In Progress'}</td>
+                </tr>
+              ) : (
+                Object.entries(typeCounts).map(([typeName, counts]) => (
+                  <tr key={typeName}>
+                    <td style={{ fontWeight: 600, textTransform: 'capitalize' }}>
+                      {typeName}s
+                    </td>
+                    <td>{counts.total}</td>
+                    <td>{counts.succeeded}</td>
+                    <td>{counts.failed}</td>
+                    <td style={{ color: counts.failed === 0 ? 'var(--green)' : 'var(--yellow)', fontWeight: 600 }}>
+                      {counts.failed === 0 ? 'Verified' : `${counts.failed} Warnings`}
+                    </td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
         </div>

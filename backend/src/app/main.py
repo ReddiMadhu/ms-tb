@@ -77,13 +77,16 @@ app.add_middleware(
 
 # ── Route Registration ───────────────────────────────────────────
 
-from app.api.v1.jobs import router as jobs_router          # noqa: E402
+from app.api.v1.jobs import router as jobs_router, list_cross_references          # noqa: E402
 from app.api.v1.discovery import router as discovery_router  # noqa: E402
 from app.api.v1.review import router as review_router        # noqa: E402
+from app.api.v1.audit import router as audit_router          # noqa: E402
 
 app.include_router(jobs_router, prefix="/api/v1")
 app.include_router(discovery_router, prefix="/api/v1")
 app.include_router(review_router, prefix="/api/v1")
+app.include_router(audit_router, prefix="/api/v1")
+app.add_api_route("/api/v1/cross-reference", list_cross_references, methods=["GET"], tags=["cross-reference"])
 
 
 # ── Health Check ─────────────────────────────────────────────────

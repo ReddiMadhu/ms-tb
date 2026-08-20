@@ -14,48 +14,66 @@ interface ValidationScorecardProps {
   gates?: GateStatus[];
   autoPublishEligible?: boolean;
   totalBlockers?: number;
+  job?: {
+    structural_confidence?: number | null;
+    financial_kpi_confidence?: number | null;
+    security_confidence?: number | null;
+    visual_confidence?: number | null;
+    security_parity?: boolean | null;
+    status?: string;
+  } | null;
 }
 
-const DEFAULT_GATES: GateStatus[] = [
-  {
-    name: 'Structural Gate',
-    score: 0.992,
-    threshold: 0.98,
-    passed: true,
-    blockers: 0,
-    description: 'Schema tables, column mappings, and relationship models',
-  },
-  {
-    name: 'Financial & KPI Numeric Gate',
-    score: 0.995,
-    threshold: 0.98,
-    passed: true,
-    blockers: 0,
-    description: 'Direct SQL & JSON API aggregation parity against source warehouse',
-  },
-  {
-    name: 'Security & RLS Gate',
-    score: 1.0,
-    threshold: 1.0,
-    passed: true,
-    blockers: 0,
-    description: 'Security filter translation and USERNAME() delimiter isolation',
-  },
-  {
-    name: 'Visual & Layout Gate',
-    score: 0.91,
-    threshold: 0.85,
-    passed: true,
-    blockers: 0,
-    description: 'Worksheet visual types, legends, filters, and container layouts',
-  },
-];
-
 export const ValidationScorecard: React.FC<ValidationScorecardProps> = ({
-  gates = DEFAULT_GATES,
-  autoPublishEligible = true,
+  gates: customGates,
+  autoPublishEligible,
   totalBlockers = 0,
+  job,
 }) => {
+  // Compute gates from actual DB job record if provided
+  const structuralScore = job?.structural_confidence ?? 1.0;
+  const financialScore = job?.financial_kpi_confidence ?? 0.0;
+  const securityScore = job?.security_confidence ?? 1.0;
+  const visualScore = job?.visual_confidence ?? 1.0;
+
+  const computedGates: GateStatus[] = [
+    {
+      name: 'Structural Gate',
+      score: structuralScore,
+      threshold: 0.99,
+      passed: structuralScore >= 0.99,
+      blockers: structuralScore < 0.99 ? 1 : 0,
+      description: 'Schema tables, column mappings, and relationship models',
+    },
+    {
+      name: 'Financial & KPI Numeric Gate',
+      score: financialScore,
+      threshold: 0.98,
+      passed: financialScore >= 0.98,
+      blockers: financialScore < 0.98 ? 1 : 0,
+      description: 'Direct SQL & JSON API aggregation parity against source warehouse',
+    },
+    {
+      name: 'Security & RLS Gate',
+      score: securityScore,
+      threshold: 1.0,
+      passed: securityScore >= 1.0 && (job?.security_parity !== false),
+      blockers: securityScore < 1.0 ? 1 : 0,
+      description: 'Security filter translation and USERNAME() delimiter isolation',
+    },
+    {
+      name: 'Visual & Layout Gate',
+      score: visualScore,
+      threshold: 0.80,
+      passed: visualScore >= 0.80,
+      blockers: visualScore < 0.80 ? 1 : 0,
+      description: 'Worksheet visual types, legends, filters, and container layouts',
+    },
+  ];
+
+  const gates = customGates || computedGates;
+  const allPassed = gates.every(g => g.passed);
+  const isAutoPublishApproved = autoPublishEligible !== undefined ? autoPublishEligible : (allPassed && totalBlockers === 0);
   return (
     <div
       style={{
@@ -94,14 +112,14 @@ export const ValidationScorecard: React.FC<ValidationScorecardProps> = ({
             gap: '8px',
             padding: '6px 14px',
             borderRadius: 'var(--radius-full)',
-            background: autoPublishEligible ? 'var(--green-tint)' : 'var(--yellow-tint)',
-            color: autoPublishEligible ? 'var(--green)' : 'var(--yellow)',
+            background: isAutoPublishApproved ? 'var(--green-tint)' : 'var(--yellow-tint)',
+            color: isAutoPublishApproved ? 'var(--green)' : 'var(--yellow)',
             fontSize: '0.8125rem',
             fontWeight: 700,
           }}
         >
-          {autoPublishEligible ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />}
-          <span>{autoPublishEligible ? 'Auto-Publish Approved' : `${totalBlockers} Blockers Pending`}</span>
+          {isAutoPublishApproved ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />}
+          <span>{isAutoPublishApproved ? 'Auto-Publish Approved' : `${totalBlockers > 0 ? totalBlockers : 'Quality'} Gate Review Pending`}</span>
         </div>
       </div>
 

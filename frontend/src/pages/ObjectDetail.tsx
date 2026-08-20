@@ -99,23 +99,23 @@ export default function ObjectDetail() {
             style={{
               padding: '8px 16px',
               borderRadius: 'var(--radius-md)',
-              background: 'var(--green-tint)',
-              color: 'var(--green)',
+              background: object.confidence && object.confidence >= 0.9 ? 'var(--green-tint)' : 'var(--blue-tint)',
+              color: object.confidence && object.confidence >= 0.9 ? 'var(--green)' : 'var(--blue)',
               fontWeight: 700,
-              fontSize: '1.125rem',
+              fontSize: '1rem',
               display: 'flex',
               alignItems: 'center',
               gap: '6px',
             }}
           >
             <CheckCircle2 size={18} />
-            <span>{Math.round((object.confidence || 0.95) * 100)}% Parity</span>
+            <span>{object.confidence !== undefined && object.confidence !== null ? `${Math.round(object.confidence * 100)}% Confidence` : 'Cataloged'}</span>
           </div>
         </div>
       </div>
 
       {/* ── Side-by-Side Formula Diff ────────────────────────────── */}
-      {object.expression_text && object.tableau_calc && (
+      {(object.expression_text || object.tableau_calc) && (
         <div
           style={{
             background: 'var(--surface)',
@@ -130,14 +130,14 @@ export default function ObjectDetail() {
             Expression Translation &amp; Formula Comparison
           </h3>
           <p style={{ fontSize: '0.8125rem', color: 'var(--ink-2)', marginTop: '4px' }}>
-            Direct translation AST tree mapping MicroStrategy dimensionality grain to Tableau calc dialect
+            {object.translation_method ? `Translation Method: ${object.translation_method}` : 'Universal BI-IR mapping from MicroStrategy expression to Tableau calculated field dialect'}
           </p>
 
           <ExpressionDiff
-            sourceExpression={object.expression_text}
-            targetExpression={object.tableau_calc}
+            sourceExpression={object.expression_text || '—'}
+            targetExpression={object.tableau_calc || '—'}
             confidence={object.confidence}
-            explanation="Level metric at Year grain translated to LOOKUP table calculation offset."
+            explanation={object.translation_method ? `Translated via ${object.translation_method}` : 'Extracted formula definition from MicroStrategy metadata.'}
           />
         </div>
       )}
@@ -167,23 +167,25 @@ export default function ObjectDetail() {
             </h3>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            {object.dependencies?.map((dep, i) => (
-              <div
-                key={i}
-                style={{
-                  padding: '8px 12px',
-                  background: 'var(--field)',
-                  borderRadius: 'var(--radius-sm)',
-                  fontSize: '0.8125rem',
-                  fontFamily: 'var(--font-mono)',
-                  color: 'var(--ink)',
-                }}
-              >
-                {dep}
-              </div>
-            )) || (
+            {((object as any).dependency_ids || object.dependencies)?.length ? (
+              ((object as any).dependency_ids || object.dependencies).map((dep: string, i: number) => (
+                <div
+                  key={i}
+                  style={{
+                    padding: '8px 12px',
+                    background: 'var(--field)',
+                    borderRadius: 'var(--radius-sm)',
+                    fontSize: '0.8125rem',
+                    fontFamily: 'var(--font-mono)',
+                    color: 'var(--ink)',
+                  }}
+                >
+                  {dep}
+                </div>
+              ))
+            ) : (
               <span style={{ fontSize: '0.8125rem', color: 'var(--ink-3)' }}>
-                Base measure with direct warehouse relation.
+                Base entity with direct warehouse relation.
               </span>
             )}
           </div>
@@ -205,20 +207,22 @@ export default function ObjectDetail() {
             </h3>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            {object.dependents?.map((dep, i) => (
-              <div
-                key={i}
-                style={{
-                  padding: '8px 12px',
-                  background: 'var(--field)',
-                  borderRadius: 'var(--radius-sm)',
-                  fontSize: '0.8125rem',
-                  color: 'var(--ink)',
-                }}
-              >
-                {dep}
-              </div>
-            )) || (
+            {object.dependents?.length ? (
+              object.dependents.map((dep, i) => (
+                <div
+                  key={i}
+                  style={{
+                    padding: '8px 12px',
+                    background: 'var(--field)',
+                    borderRadius: 'var(--radius-sm)',
+                    fontSize: '0.8125rem',
+                    color: 'var(--ink)',
+                  }}
+                >
+                  {dep}
+                </div>
+              ))
+            ) : (
               <span style={{ fontSize: '0.8125rem', color: 'var(--ink-3)' }}>
                 No active downstream dependents.
               </span>

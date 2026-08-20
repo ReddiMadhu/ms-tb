@@ -20,7 +20,7 @@ export default function LineageExplorer() {
   const [search, setSearch] = useState('');
 
   useEffect(() => {
-    api.getCrossReference()
+    api.getCrossReference({ job_id: jobId })
       .then((res) => {
         if (res.mappings && res.mappings.length > 0) {
           setMappings(res.mappings);
@@ -31,9 +31,9 @@ export default function LineageExplorer() {
               mstr_name: o.name,
               mstr_type: o.type_name || 'object',
               mstr_path: o.mstr_path || '/Public Objects/',
-              tableau_workbook_id: o.cross_reference?.tableau_workbook_id || 'tb-wb-staging',
+              tableau_workbook_id: o.cross_reference?.tableau_workbook_id || `wb-${jobId.slice(0, 8)}`,
               tableau_workbook_name: 'Target Tableau Model',
-              tableau_datasource_id: o.cross_reference?.tableau_datasource_id || 'ds-staging',
+              tableau_datasource_id: o.cross_reference?.tableau_datasource_id || `ds-${jobId.slice(0, 8)}`,
               tableau_field_name: o.tableau_calc || o.name,
               tableau_field_type: o.type_name === 'metric' ? 'measure' : 'dimension',
               job_id: o.job_id,

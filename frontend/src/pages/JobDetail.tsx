@@ -3,15 +3,19 @@ import { useParams, Link } from 'react-router-dom';
 import { AlertTriangle } from 'lucide-react';
 import { api, type Job, type ArtifactItem } from '../api';
 import { PipelineStepper } from '../components/execution/PipelineStepper';
-import { StageDetailPanel } from '../components/execution/StageDetailPanel';
-import { PIPELINE_STAGES, getStageIndex } from '../config/pipeline.config';
+import { PhaseContentPanel } from '../components/execution/PhaseContentPanel';
+import {
+  PIPELINE_STAGES,
+  PIPELINE_PHASES,
+  getStageIndex,
+  getPhaseForStage,
+} from '../config/pipeline.config';
 
 export default function JobDetailPage() {
   const { jobId } = useParams<{ jobId: string }>();
 
   const [job, setJob] = useState<Job | null>(null);
-  const [artifacts, setArtifacts] = useState<ArtifactItem[]>([]);
-  const [selectedStageId, setSelectedStageId] = useState<string>('DISCOVERY');
+  const [selectedPhaseId, setSelectedPhaseId] = useState<string>('EXTRACTION_CATALOG');
   const [loading, setLoading] = useState(true);
   const [resuming, setResuming] = useState(false);
   const [cancelling, setCancelling] = useState(false);
@@ -22,15 +26,12 @@ export default function JobDetailPage() {
       const jobData = await api.getJob(jobId);
       setJob(jobData);
 
-      // Auto-follow current or failed stage
-      if (jobData.progress?.current_stage) {
-        setSelectedStageId(jobData.progress.current_stage);
-      } else if (jobData.current_stage) {
-        setSelectedStageId(jobData.current_stage);
+      // Auto-follow current stage → map to its phase
+      const currentStage = jobData.progress?.current_stage || jobData.current_stage;
+      if (currentStage) {
+        const phase = getPhaseForStage(currentStage);
+        if (phase) setSelectedPhaseId(phase.id);
       }
-
-      const artData = await api.listArtifacts(jobId).catch(() => ({ artifacts: [] }));
-      setArtifacts(artData.artifacts || []);
     } catch (e) {
       console.error('Failed to load migration hub data:', e);
     } finally {
@@ -41,7 +42,6 @@ export default function JobDetailPage() {
   useEffect(() => {
     loadData();
 
-    // Only set up polling timer if job is currently active or initializing
     if (job && !['RUNNING', 'PENDING', 'PROMOTING'].includes(job.status)) {
       return;
     }
@@ -82,37 +82,24 @@ export default function JobDetailPage() {
   const isComplete = ['COMPLETE', 'COMPLETE_WITH_WARNINGS', 'PUBLISHED'].includes(job.status);
   const isFailed = job.status === 'FAILED';
 
-  // Compute completed stages array
+  // Compute per-stage status map
   const currentStageKey = job.progress?.current_stage || job.current_stage || 'DISCOVERY';
   const currentIdx = getStageIndex(currentStageKey);
-  const completedStageKeys = isComplete
-    ? PIPELINE_STAGES.map((s) => s.id)
-    : PIPELINE_STAGES.filter((_, idx) => idx < currentIdx).map((s) => s.id);
 
-  // Compute progress percentage
-  const totalStages = PIPELINE_STAGES.length;
-  const progressPercent = isComplete
-    ? 100
-    : Math.max(5, Math.round(((completedStageKeys.length + (isRunning ? 0.5 : 0)) / totalStages) * 100));
-
-  const totalObjs = job.progress?.objects_total || job.objects_total || 0;
-  const processedObjs = job.progress?.objects_processed || job.objects_processed || 0;
-  const succeededObjs = job.progress?.objects_succeeded || job.objects_succeeded || processedObjs;
-  const failedObjs = job.progress?.objects_failed || job.objects_failed || 0;
-  const confidenceScore = job.validation?.structural_confidence;
-
-  const handleCancel = async () => {
-    if (!jobId || !window.confirm('Are you sure you want to cancel this migration job?')) return;
-    setCancelling(true);
-    try {
-      await api.cancelJob(jobId);
-      await loadData();
-    } catch (e) {
-      alert('Failed to cancel job');
-    } finally {
-      setCancelling(false);
+  const stageStatuses: Record<string, string> = {};
+  PIPELINE_STAGES.forEach((s, idx) => {
+    if (isComplete) {
+      stageStatuses[s.id] = 'COMPLETED';
+    } else if (isFailed && s.id === currentStageKey) {
+      stageStatuses[s.id] = 'FAILED';
+    } else if (idx < currentIdx) {
+      stageStatuses[s.id] = 'COMPLETED';
+    } else if (s.id === currentStageKey && isRunning) {
+      stageStatuses[s.id] = 'RUNNING';
+    } else {
+      stageStatuses[s.id] = 'WAITING';
     }
-  };
+  });
 
   const handleResume = async () => {
     if (!jobId) return;
@@ -127,11 +114,21 @@ export default function JobDetailPage() {
     }
   };
 
+  const handleCancel = async () => {
+    if (!jobId || !window.confirm('Are you sure you want to cancel this migration job?')) return;
+    setCancelling(true);
+    try {
+      await api.cancelJob(jobId);
+      await loadData();
+    } catch (e) {
+      alert('Failed to cancel job');
+    } finally {
+      setCancelling(false);
+    }
+  };
+
   return (
     <div style={{ maxWidth: '1440px', margin: '0 auto' }}>
-
-
-
 
       {/* ── Failure Banner (if any) ──────────────────────────────── */}
       {isFailed && (
@@ -167,38 +164,18 @@ export default function JobDetailPage() {
         </div>
       )}
 
-      {/* ── Interactive Pipeline Stepper ─────────────────────────── */}
+      {/* ── 4-Node Pipeline Stepper ──────────────────────────────── */}
       <PipelineStepper
-        currentStageId={isRunning ? currentStageKey : undefined}
-        selectedStageId={selectedStageId}
-        onSelectStage={setSelectedStageId}
-        stagesCompleted={completedStageKeys}
-        failedStageId={isFailed ? currentStageKey : undefined}
+        selectedPhaseId={selectedPhaseId}
+        onSelectPhase={setSelectedPhaseId}
+        stageStatuses={stageStatuses}
       />
 
-      {/* ── Clicked Stage Detail Panel ───────────────────────────── */}
-      <StageDetailPanel
-        stageId={selectedStageId}
-        jobId={jobId!}
-        status={
-          isFailed && selectedStageId === currentStageKey
-            ? 'FAILED'
-            : isRunning && selectedStageId === currentStageKey
-              ? 'RUNNING'
-              : completedStageKeys.includes(selectedStageId)
-                ? 'COMPLETED'
-                : 'WAITING'
-        }
-        durationSeconds={job.duration_seconds}
-        stats={{
-          objects_discovered: totalObjs,
-          processed: processedObjs,
-          succeeded: succeededObjs,
-          failed: failedObjs,
-        }}
-        artifacts={artifacts.map((a) => ({ name: a.file_name, path: a.file_path, size: `${Math.round(a.size_bytes / 1024)} KB` }))}
+      {/* ── Phase Content Panel ──────────────────────────────────── */}
+      <PhaseContentPanel
+        phaseId={selectedPhaseId}
+        stageStatuses={stageStatuses}
       />
-
 
     </div>
   );

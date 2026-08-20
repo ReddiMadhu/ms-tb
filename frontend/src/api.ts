@@ -61,17 +61,30 @@ export interface Job {
   status: string;
   mstr_base_url: string;
   mstr_project_id: string;
+  mstr_project_name?: string;
+  mstr_version?: string;
   tableau_server_url?: string;
+  tableau_site_id?: string;
+  tableau_target_project?: string;
+  template_version?: string;
   created_at: string;
   started_at?: string;
   completed_at?: string;
   current_stage?: string;
+  current_wave?: number;
+  total_waves?: number;
   progress?: JobProgress;
   validation?: JobValidationSummary;
+  security_confidence?: number;
+  financial_kpi_confidence?: number;
+  structural_confidence?: number;
+  visual_confidence?: number;
+  security_parity?: boolean;
   objects_total?: number;
   objects_processed?: number;
   objects_succeeded?: number;
   objects_failed?: number;
+  objects_skipped?: number;
   review_queue_count?: number;
   auto_publish?: boolean;
   error_message?: string;
@@ -88,15 +101,21 @@ export interface MigrationObject {
   mstr_path?: string;
   status: string;
   confidence?: number;
+  translation_method?: string;
   expression_text?: string;
   tableau_calc?: string;
+  tableau_field_name?: string;
   blocker_count?: number;
   warning_count?: number;
+  issue_count?: number;
   issues?: string[];
   dependencies?: string[];
+  dependency_ids?: string[];
   dependents?: string[];
   mstr_definition?: Record<string, any>;
   ir_node?: Record<string, any>;
+  compound_key_json?: any;
+  scope?: string;
   cross_reference?: {
     tableau_workbook_id?: string;
     tableau_datasource_id?: string;
@@ -479,8 +498,9 @@ export const api = {
     fetchJSON<ValidationMatrixResponse>(`/jobs/${jobId}/validation-matrix`),
 
   // 9. Lineage & Cross-Reference
-  getCrossReference: (params?: { mstr_id?: string; tableau_id?: string }) => {
+  getCrossReference: (params?: { job_id?: string; mstr_id?: string; tableau_id?: string }) => {
     const q = new URLSearchParams();
+    if (params?.job_id) q.set('job_id', params.job_id);
     if (params?.mstr_id) q.set('mstr_id', params.mstr_id);
     if (params?.tableau_id) q.set('tableau_id', params.tableau_id);
     const query = q.toString() ? `?${q.toString()}` : '';
@@ -504,7 +524,7 @@ export const api = {
 
   // 11. Reports & Exports
   generateReport: (jobId: string, format: 'excel' | 'pdf' | 'json') =>
-    fetchJSON<{ report_url: string; generated_at: string }>(`/jobs/${jobId}/report`, {
+    fetchJSON<{ report_url: string; generated_at: string; format?: string; summary?: Record<string, any> }>(`/jobs/${jobId}/report`, {
       method: 'POST',
       body: JSON.stringify({ format }),
     }),

@@ -135,3 +135,65 @@ async def test_pipeline_orchestrator_execution(db_session):
             assert completed_job.started_at is not None
             assert completed_job.completed_at is not None
             assert completed_job.checkpoint_stage == "REPORT"
+
+
+def test_audit_log_endpoint(client, db_session):
+    """Test retrieving audit logs via GET /api/v1/audit."""
+    from app.models.audit import AuditLog
+
+    audit_entry = AuditLog(
+        job_id="test-job-audit-123",
+        event_type="DISCOVERY_COMPLETED",
+        details={"scanned_objects": 25, "status": "success"},
+    )
+    db_session.add(audit_entry)
+    db_session.commit()
+
+    res = client.get("/api/v1/audit?job_id=test-job-audit-123")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["total"] >= 1
+    assert any(e["event_type"] == "DISCOVERY_COMPLETED" for e in data["events"])
+
+
+def test_cross_reference_and_report_endpoints(client, db_session):
+    """Test cross reference lineage and executive report generation endpoints."""
+    from app.models.objects import MigrationObject
+
+    job = Job(
+        id="test-job-report-456",
+        name="Quarterly Financials",
+        status="COMPLETE",
+        mstr_base_url="https://env-test.cloud.strategy.com/MicroStrategyLibrary",
+        mstr_project_id="B928FD6C7B744238BE7CEDE129051F13",
+        tableau_target_project="Finance Dashboards",
+        template_version="2024.2",
+    )
+    db_session.add(job)
+
+    obj = MigrationObject(
+        id="obj-fin-1",
+        job_id="test-job-report-456",
+        mstr_id="MSTR-METRIC-99",
+        mstr_type=4,
+        type_name="metric",
+        name="Gross Profit Margin",
+        status="compiled",
+        tableau_calc="SUM([Gross Profit]) / SUM([Revenue])",
+    )
+    db_session.add(obj)
+    db_session.commit()
+
+    # Test cross-reference endpoint
+    res_xref = client.get("/api/v1/cross-reference?job_id=test-job-report-456")
+    assert res_xref.status_code == 200
+    assert res_xref.json()["total"] >= 1
+    assert res_xref.json()["mappings"][0]["mstr_name"] == "Gross Profit Margin"
+
+    # Test report generation endpoint
+    res_report = client.post("/api/v1/jobs/test-job-report-456/report", json={"format": "json"})
+    assert res_report.status_code == 200
+    report_data = res_report.json()
+    assert report_data["job_id"] == "test-job-report-456"
+    assert report_data["summary"]["job_name"] == "Quarterly Financials"
+    assert report_data["summary"]["metrics"]["objects_total"] >= 1

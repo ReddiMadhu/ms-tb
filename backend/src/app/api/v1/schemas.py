@@ -159,6 +159,12 @@ class ObjectResponse(BaseModel):
     translation_method: Optional[str] = None
     expression_text: Optional[str] = None
     tableau_calc: Optional[str] = None
+    tableau_field_name: Optional[str] = None
+    dependency_ids: Optional[list[str]] = None
+    mstr_definition: Optional[dict[str, Any]] = None
+    ir_node: Optional[dict[str, Any]] = None
+    compound_key_json: Optional[Any] = None
+    scope: Optional[str] = None
     issue_count: int = 0
     blocker_count: int = 0
 
@@ -237,13 +243,18 @@ class BlastRadiusResponse(BaseModel):
 class ValidationCheckResponse(BaseModel):
     """Individual validation check result."""
 
+    id: Optional[str] = None
+    object_id: Optional[str] = None
     check_type: str
-    check_name: str
+    check_name: Optional[str] = None
+    category: Optional[str] = None
+    filter_scenario: Optional[str] = None
     passed: bool
     expected_value: Optional[str] = None
     actual_value: Optional[str] = None
     tolerance: Optional[float] = None
     message: Optional[str] = None
+    executed_at: Optional[datetime] = None
 
     model_config = {"from_attributes": True}
 
@@ -262,3 +273,81 @@ class ValidationScorecardResponse(BaseModel):
     warning_issues: int
     mandatory_review_flags: int
     checks: list[ValidationCheckResponse]
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  Audit, Lineage, Checkpoints & Report Schemas
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+class AuditEventResponse(BaseModel):
+    id: int
+    job_id: Optional[str] = None
+    event_type: str
+    timestamp: datetime
+    details: dict[str, Any] = Field(default_factory=dict)
+    prompt_hash: Optional[str] = None
+    api_method: Optional[str] = None
+    api_url: Optional[str] = None
+    api_status_code: Optional[int] = None
+    api_duration_ms: Optional[int] = None
+
+    model_config = {"from_attributes": True}
+
+
+class AuditListResponse(BaseModel):
+    events: list[AuditEventResponse]
+    total: int
+
+
+class CrossReferenceResponse(BaseModel):
+    id: str
+    job_id: str
+    mstr_id: str
+    mstr_name: str
+    mstr_type: str
+    mstr_path: Optional[str] = None
+    tableau_workbook_id: Optional[str] = None
+    tableau_workbook_name: Optional[str] = None
+    tableau_datasource_id: Optional[str] = None
+    tableau_field_name: Optional[str] = None
+    published_field_name: Optional[str] = None
+    tableau_field_type: Optional[str] = None
+    tableau_project: Optional[str] = None
+    migrated_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}
+
+
+class CrossReferenceListResponse(BaseModel):
+    mappings: list[CrossReferenceResponse]
+    total: int
+
+
+class CheckpointItemResponse(BaseModel):
+    id: str
+    job_id: str
+    object_id: str
+    page_offset: int
+    rows_written: int
+    completed: bool
+    updated_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}
+
+
+class CheckpointsResponse(BaseModel):
+    job_id: str
+    checkpoints: list[CheckpointItemResponse]
+    total: int
+
+
+class ReportGenerateRequest(BaseModel):
+    format: str = "json"  # json, excel, pdf
+
+
+class ReportGenerateResponse(BaseModel):
+    job_id: str
+    report_url: str
+    generated_at: datetime
+    format: str
+    summary: dict[str, Any]

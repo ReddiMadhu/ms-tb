@@ -1735,15 +1735,22 @@ body {
 
 .pipeline-step-label {
   margin-top: 8px;
-  font-size: 0.75rem;
+  font-size: 0.8125rem;
   font-weight: 600;
   color: var(--ink-2);
   text-align: center;
-  max-width: 80px;
+  max-width: 200px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   transition: color 0.15s ease;
+}
+
+.pipeline-step-sub {
+  font-size: 0.6875rem;
+  font-weight: 500;
+  color: var(--ink-3);
+  margin-top: 2px;
 }
 
 .pipeline-step-node.active .pipeline-step-label {
@@ -2350,3 +2357,196 @@ body {
   background: var(--surface-hover);
 }
 
+/* ── Phase Content Panel ───────────────────────────────────────── */
+.phase-content-panel {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  margin-bottom: 24px;
+  overflow: hidden;
+}
+
+.phase-content-header {
+  padding: 20px 24px;
+  border-left: 4px solid var(--primary);
+  border-bottom: 1px solid var(--line);
+}
+
+.phase-content-title-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.phase-content-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.phase-content-title {
+  font-size: 1.125rem;
+  font-weight: 700;
+  color: var(--ink);
+  margin: 0;
+  letter-spacing: -0.01em;
+}
+
+.phase-content-desc {
+  font-size: 0.8125rem;
+  color: var(--ink-2);
+  margin: 2px 0 0 0;
+}
+
+.phase-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: var(--radius-full);
+  font-size: 0.75rem;
+  font-weight: 600;
+  margin-left: auto;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.phase-status-badge.completed {
+  background: var(--green-tint);
+  color: var(--green);
+}
+
+.phase-status-badge.running {
+  background: var(--blue-tint);
+  color: var(--blue);
+}
+
+.phase-status-badge.failed {
+  background: var(--red-tint);
+  color: var(--red);
+}
+
+.phase-status-badge.warning {
+  background: var(--yellow-tint);
+  color: var(--yellow);
+}
+
+.phase-status-badge.waiting {
+  background: var(--hover);
+  color: var(--ink-3);
+}
+
+/* Phase stage pills */
+.phase-stage-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.phase-stage-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: var(--radius-full);
+  font-size: 0.75rem;
+  font-weight: 600;
+  border: 1px solid var(--line);
+  background: var(--field);
+  color: var(--ink-2);
+  transition: all 0.15s ease;
+}
+
+.phase-stage-pill.completed {
+  background: var(--green-tint);
+  border-color: color-mix(in srgb, var(--green) 25%, transparent);
+  color: var(--green);
+}
+
+.phase-stage-pill.running {
+  background: var(--blue-tint);
+  border-color: color-mix(in srgb, var(--blue) 25%, transparent);
+  color: var(--blue);
+}
+
+.phase-stage-pill.failed {
+  background: var(--red-tint);
+  border-color: color-mix(in srgb, var(--red) 25%, transparent);
+  color: var(--red);
+}
+
+.phase-stage-pill.warning {
+  background: var(--yellow-tint);
+  border-color: color-mix(in srgb, var(--yellow) 25%, transparent);
+  color: var(--yellow);
+}
+
+.phase-stage-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ink-3);
+}
+
+/* Phase tabs */
+.phase-tabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid var(--line);
+  background: var(--field);
+  padding: 0 8px;
+}
+
+.phase-tab {
+  padding: 12px 18px;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--ink-2);
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  position: relative;
+  transition: color 0.15s ease;
+  white-space: nowrap;
+}
+
+.phase-tab:hover {
+  color: var(--ink);
+}
+
+.phase-tab.active {
+  color: var(--primary);
+}
+
+.phase-tab.active::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 8px;
+  right: 8px;
+  height: 2px;
+  background: var(--primary);
+  border-radius: 2px 2px 0 0;
+}
+
+/* Phase tab content */
+.phase-tab-content {
+  padding: 24px;
+  min-height: 300px;
+}
+
+.phase-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 60px 0;
+  color: var(--ink-3);
+  font-size: 0.875rem;
+}

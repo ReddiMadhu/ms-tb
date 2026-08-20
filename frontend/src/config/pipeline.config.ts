@@ -133,3 +133,103 @@ export function getStageConfig(stageId: string): PipelineStageConfig | undefined
 export function getStageIndex(stageId: string): number {
   return PIPELINE_STAGES.findIndex(s => s.id === stageId);
 }
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Phase Grouping — 4 lifecycle phases that aggregate the 12 stages
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+export interface PhaseConfig {
+  id: string;
+  number: number;
+  title: string;
+  description: string;
+  icon: string;          // lucide icon name
+  color: string;
+  stageIds: string[];    // ordered child stage IDs
+  subViews: { label: string; key: string }[];
+}
+
+export const PIPELINE_PHASES: PhaseConfig[] = [
+  {
+    id: 'EXTRACTION_CATALOG',
+    number: 1,
+    title: 'Extraction & Catalog',
+    description: 'Discover objects and map dependency graph',
+    icon: 'Search',
+    color: 'var(--blue)',
+    stageIds: ['DISCOVERY', 'GRAPH'],
+    subViews: [
+      { label: 'Object Catalog', key: 'objects' },
+      { label: 'Lineage Explorer', key: 'lineage' },
+    ],
+  },
+  {
+    id: 'SEMANTIC_LOGIC',
+    number: 2,
+    title: 'Semantic & Logic',
+    description: 'Extract semantics, deduplicate, compile & translate',
+    icon: 'Layers',
+    color: 'var(--primary)',
+    stageIds: ['SEMANTIC', 'METRIC_DEDUPLICATION', 'IR_COMPILE', 'AI_TRANSLATE'],
+    subViews: [
+      { label: 'Semantic Model', key: 'semantic' },
+      { label: 'Logic & Calculations', key: 'logic' },
+    ],
+  },
+  {
+    id: 'TARGET_BUILD',
+    number: 3,
+    title: 'Target Artifact Generation',
+    description: 'Plan visualizations, build extracts, emit datasources & workbooks',
+    icon: 'FileSpreadsheet',
+    color: 'var(--green)',
+    stageIds: ['VIZ', 'HYPER_BUILD', 'DATASOURCE_EMIT', 'WORKBOOK_EMIT_STAGING'],
+    subViews: [
+      { label: 'Dashboard Inventory', key: 'dashboards' },
+      { label: 'Export Center', key: 'exports' },
+    ],
+  },
+  {
+    id: 'QUALITY_PACKAGE',
+    number: 4,
+    title: 'Quality & Final Package',
+    description: 'Validate all artifacts and generate migration report',
+    icon: 'ShieldCheck',
+    color: 'var(--yellow)',
+    stageIds: ['STATIC_VALIDATE', 'REPORT'],
+    subViews: [
+      { label: 'Validation Center', key: 'validation' },
+      { label: 'Issue Review Queue', key: 'review' },
+      { label: 'Migration Report', key: 'report' },
+    ],
+  },
+];
+
+export function getPhaseForStage(stageId: string): PhaseConfig | undefined {
+  return PIPELINE_PHASES.find(p => p.stageIds.includes(stageId));
+}
+
+export function getPhaseConfig(phaseId: string): PhaseConfig | undefined {
+  return PIPELINE_PHASES.find(p => p.id === phaseId);
+}
+
+/**
+ * Compute aggregated status for a phase from its child stage statuses.
+ * Priority: FAILED > RUNNING > WARNING > COMPLETED > WAITING
+ */
+export function getPhaseStatus(
+  phaseId: string,
+  stageStatuses: Record<string, string>,
+): string {
+  const phase = getPhaseConfig(phaseId);
+  if (!phase) return 'WAITING';
+
+  const statuses = phase.stageIds.map(id => stageStatuses[id] || 'WAITING');
+
+  if (statuses.some(s => s === 'FAILED')) return 'FAILED';
+  if (statuses.some(s => s === 'RUNNING')) return 'RUNNING';
+  if (statuses.some(s => s === 'WARNING')) return 'WARNING';
+  if (statuses.every(s => s === 'COMPLETED')) return 'COMPLETED';
+  if (statuses.some(s => s === 'COMPLETED')) return 'RUNNING'; // partially complete
+  return 'WAITING';
+}

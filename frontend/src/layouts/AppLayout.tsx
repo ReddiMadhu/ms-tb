@@ -8,20 +8,10 @@ import {
   Plus,
   Sun,
   Moon,
-  ArrowRightLeft,
-  ShieldCheck,
-  AlertTriangle,
-  GitBranch,
-  Layers,
-  Code,
-  Download,
   History,
-  FileText,
   PanelLeftClose,
   PanelLeft,
   Search,
-  ChevronRight,
-  Activity,
 } from 'lucide-react';
 import { api } from '../api';
 import CommandPalette from '../components/CommandPalette';
@@ -175,118 +165,12 @@ export default function AppLayout() {
               </NavLink>
 
               <NavLink
-                to={`/jobs/${jobId}/execution`}
-                className={({ isActive }) => `sidebar-nav-item ${isActive ? 'active' : ''}`}
-                title={sidebarCollapsed ? 'Live Execution' : undefined}
-              >
-                <Activity size={16} className="icon" />
-                <span className="sidebar-text">Live Execution</span>
-              </NavLink>
-
-              <NavLink
-                to={`/jobs/${jobId}/objects`}
-                className={({ isActive }) => `sidebar-nav-item ${isActive ? 'active' : ''}`}
-                title={sidebarCollapsed ? 'Object Catalog' : undefined}
-              >
-                <ArrowRightLeft size={16} className="icon" />
-                <span className="sidebar-text">Objects</span>
-              </NavLink>
-
-              <NavLink
-                to={`/jobs/${jobId}/validation`}
-                className={({ isActive }) => `sidebar-nav-item ${isActive ? 'active' : ''}`}
-                title={sidebarCollapsed ? 'Validation Center' : undefined}
-              >
-                <ShieldCheck size={16} className="icon" />
-                <span className="sidebar-text">Validation</span>
-              </NavLink>
-
-              <NavLink
-                to={`/jobs/${jobId}/review`}
-                className={({ isActive }) => `sidebar-nav-item ${isActive ? 'active' : ''}`}
-                title={sidebarCollapsed ? 'Issue Center' : undefined}
-              >
-                <AlertTriangle size={16} className="icon" />
-                <span className="sidebar-text">Issues</span>
-                {reviewCount !== null && reviewCount > 0 && !sidebarCollapsed && (
-                  <span
-                    className="badge-pill"
-                    style={{
-                      marginLeft: 'auto',
-                      background: 'var(--yellow-tint)',
-                      color: 'var(--yellow)',
-                      padding: '2px 7px',
-                      borderRadius: 'var(--radius-full)',
-                      fontSize: '0.6875rem',
-                      fontWeight: 700,
-                    }}
-                  >
-                    {reviewCount}
-                  </span>
-                )}
-              </NavLink>
-
-              <NavLink
-                to={`/jobs/${jobId}/logic`}
-                className={({ isActive }) => `sidebar-nav-item ${isActive ? 'active' : ''}`}
-                title={sidebarCollapsed ? 'Logic & Calculations' : undefined}
-              >
-                <Code size={16} className="icon" />
-                <span className="sidebar-text">Calculations</span>
-              </NavLink>
-
-              <NavLink
-                to={`/jobs/${jobId}/lineage`}
-                className={({ isActive }) => `sidebar-nav-item ${isActive ? 'active' : ''}`}
-                title={sidebarCollapsed ? 'Lineage Explorer' : undefined}
-              >
-                <GitBranch size={16} className="icon" />
-                <span className="sidebar-text">Lineage</span>
-              </NavLink>
-
-              <NavLink
-                to={`/jobs/${jobId}/semantic`}
-                className={({ isActive }) => `sidebar-nav-item ${isActive ? 'active' : ''}`}
-                title={sidebarCollapsed ? 'Semantic Model' : undefined}
-              >
-                <Layers size={16} className="icon" />
-                <span className="sidebar-text">Semantic Model</span>
-              </NavLink>
-
-              <NavLink
-                to={`/jobs/${jobId}/dashboards`}
-                className={({ isActive }) => `sidebar-nav-item ${isActive ? 'active' : ''}`}
-                title={sidebarCollapsed ? 'Dashboards' : undefined}
-              >
-                <LayoutDashboard size={16} className="icon" />
-                <span className="sidebar-text">Dashboards</span>
-              </NavLink>
-
-              <NavLink
-                to={`/jobs/${jobId}/exports`}
-                className={({ isActive }) => `sidebar-nav-item ${isActive ? 'active' : ''}`}
-                title={sidebarCollapsed ? 'Export Center' : undefined}
-              >
-                <Download size={16} className="icon" />
-                <span className="sidebar-text">Exports</span>
-              </NavLink>
-
-              <NavLink
                 to={`/jobs/${jobId}/audit`}
                 className={({ isActive }) => `sidebar-nav-item ${isActive ? 'active' : ''}`}
                 title={sidebarCollapsed ? 'Audit Trail' : undefined}
               >
                 <History size={16} className="icon" />
                 <span className="sidebar-text">Audit Trail</span>
-              </NavLink>
-
-              <NavLink
-                to={`/jobs/${jobId}/report`}
-                className={({ isActive }) => `sidebar-nav-item ${isActive ? 'active' : ''}`}
-                title={sidebarCollapsed ? 'Migration Report' : undefined}
-              >
-                <FileText size={16} className="icon" />
-                <span className="sidebar-text">Report</span>
               </NavLink>
             </nav>
           </>

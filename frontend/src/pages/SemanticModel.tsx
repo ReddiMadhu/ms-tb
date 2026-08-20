@@ -41,14 +41,27 @@ export default function SemanticModel() {
 
         if (cubes.length > 0) {
           cubes.forEach((c, idx) => {
+            const mstrDef = c.mstr_definition as any;
+            const cubeAttrs = mstrDef?.attributes || attributes;
+            const cubeMetrics = mstrDef?.metrics || metrics;
+
             entities.push({
               id: c.id || `t-cube-${idx}`,
               name: c.name,
-              rowCount: 'Dynamic Cube Grain',
-              columnCount: attributes.length + metrics.length,
+              rowCount: `${cubeAttrs.length} Attributes & ${cubeMetrics.length} Metrics`,
+              columnCount: cubeAttrs.length + cubeMetrics.length,
               columns: [
-                ...attributes.map((a) => ({ name: a.name, type: 'VARCHAR(128)', isKey: true, role: 'dimension' as const })),
-                ...metrics.map((m) => ({ name: m.name, type: 'NUMERIC(14,2)', role: 'measure' as const })),
+                ...cubeAttrs.map((a: any) => ({
+                  name: a.name || a,
+                  type: a.data_type || (a.name?.toLowerCase().includes('date') ? 'DATE' : a.name?.toLowerCase().includes('id') ? 'INTEGER' : 'VARCHAR'),
+                  isKey: Boolean(a.is_key || a.name?.toLowerCase().includes('id')),
+                  role: 'dimension' as const,
+                })),
+                ...cubeMetrics.map((m: any) => ({
+                  name: m.name || m,
+                  type: m.data_type || 'NUMERIC',
+                  role: 'measure' as const,
+                })),
               ],
               joins: [],
             });
@@ -57,11 +70,12 @@ export default function SemanticModel() {
           entities.push({
             id: 't-model',
             name: 'Discovered Semantic Schema',
-            rowCount: `${objs.length} Objects`,
+            rowCount: `${objs.length} Total Objects`,
             columnCount: objs.length,
             columns: objs.map((o) => ({
               name: o.name,
-              type: o.type_name === 'metric' ? 'NUMERIC' : 'VARCHAR',
+              type: o.type_name === 'metric' ? 'NUMERIC' : (o.name.toLowerCase().includes('date') ? 'DATE' : 'VARCHAR'),
+              isKey: o.type_name === 'attribute' && o.name.toLowerCase().includes('id'),
               role: o.type_name === 'metric' ? 'measure' : 'dimension',
             })),
             joins: [],

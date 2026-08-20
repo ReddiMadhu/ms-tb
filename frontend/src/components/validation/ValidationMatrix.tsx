@@ -12,6 +12,8 @@ import {
   XCircle,
 } from 'lucide-react';
 
+import type { ValidationCheck } from '../../api';
+
 export interface MatrixCategoryItem {
   id: string;
   name: string;
@@ -25,82 +27,20 @@ export interface MatrixCategoryItem {
 
 interface ValidationMatrixProps {
   categories?: MatrixCategoryItem[];
+  checks?: ValidationCheck[];
   selectedCategoryId?: string;
   onSelectCategory?: (categoryId: string) => void;
 }
 
-const DEFAULT_CATEGORIES: MatrixCategoryItem[] = [
-  {
-    id: 'datasource',
-    name: 'Datasource Mapping',
-    score: 1.0,
-    totalChecks: 12,
-    passedChecks: 12,
-    warningChecks: 0,
-    failedChecks: 0,
-    icon: 'Database',
-  },
-  {
-    id: 'schema',
-    name: 'Schema & Column Parity',
-    score: 1.0,
-    totalChecks: 48,
-    passedChecks: 48,
-    warningChecks: 0,
-    failedChecks: 0,
-    icon: 'Table',
-  },
-  {
-    id: 'calculation',
-    name: 'Calculation & LOD Mapping',
-    score: 0.987,
-    totalChecks: 183,
-    passedChecks: 180,
-    warningChecks: 3,
-    failedChecks: 0,
-    icon: 'Calculator',
-  },
-  {
-    id: 'filter',
-    name: 'Filter & Prompt Parity',
-    score: 0.974,
-    totalChecks: 38,
-    passedChecks: 37,
-    warningChecks: 1,
-    failedChecks: 0,
-    icon: 'Filter',
-  },
-  {
-    id: 'visual',
-    name: 'Visual Chart Conversion',
-    score: 0.962,
-    totalChecks: 52,
-    passedChecks: 50,
-    warningChecks: 2,
-    failedChecks: 0,
-    icon: 'LayoutDashboard',
-  },
-  {
-    id: 'layout',
-    name: 'Dashboard Layout Grid',
-    score: 0.991,
-    totalChecks: 24,
-    passedChecks: 24,
-    warningChecks: 0,
-    failedChecks: 0,
-    icon: 'Layers',
-  },
-  {
-    id: 'numeric',
-    name: 'Numerical Value Parity',
-    score: 0.998,
-    totalChecks: 1240,
-    passedChecks: 1238,
-    warningChecks: 2,
-    failedChecks: 0,
-    icon: 'FileCheck2',
-  },
-];
+const CATEGORY_NAMES: Record<string, { name: string; icon: string }> = {
+  structural: { name: 'Structural Schema & Hierarchy', icon: 'Layers' },
+  financial_kpi: { name: 'Financial & KPI Numeric Parity', icon: 'FileCheck2' },
+  security: { name: 'Security & RLS Filters', icon: 'Filter' },
+  visual: { name: 'Visual Charts & Layouts', icon: 'LayoutDashboard' },
+  schema: { name: 'Schema & Column Parity', icon: 'Table' },
+  calculation: { name: 'Calculations & LOD Fields', icon: 'Calculator' },
+  datasource: { name: 'Datasource & Tables', icon: 'Database' },
+};
 
 const ICON_MAP: Record<string, React.ComponentType<{ size?: number }>> = {
   Database,
@@ -113,10 +53,64 @@ const ICON_MAP: Record<string, React.ComponentType<{ size?: number }>> = {
 };
 
 export const ValidationMatrix: React.FC<ValidationMatrixProps> = ({
-  categories = DEFAULT_CATEGORIES,
+  categories: customCategories,
+  checks = [],
   selectedCategoryId,
   onSelectCategory,
 }) => {
+  // Derive categories dynamically from ground-truth checks if not explicitly provided
+  let categories: MatrixCategoryItem[] = [];
+
+  if (customCategories && customCategories.length > 0) {
+    categories = customCategories;
+  } else if (checks.length > 0) {
+    const grouped: Record<string, { total: number; passed: number; failed: number }> = {};
+    for (const c of checks) {
+      const cat = c.category || 'structural';
+      if (!grouped[cat]) grouped[cat] = { total: 0, passed: 0, failed: 0 };
+      grouped[cat].total += 1;
+      if (c.passed) {
+        grouped[cat].passed += 1;
+      } else {
+        grouped[cat].failed += 1;
+      }
+    }
+
+    categories = Object.entries(grouped).map(([catKey, counts]) => {
+      const info = CATEGORY_NAMES[catKey] || {
+        name: catKey.replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase()),
+        icon: 'FileCheck2',
+      };
+      return {
+        id: catKey,
+        name: info.name,
+        score: counts.total > 0 ? counts.passed / counts.total : 1.0,
+        totalChecks: counts.total,
+        passedChecks: counts.passed,
+        warningChecks: 0,
+        failedChecks: counts.failed,
+        icon: info.icon,
+      };
+    });
+  }
+
+  if (categories.length === 0) {
+    return (
+      <div
+        style={{
+          padding: '24px',
+          textAlign: 'center',
+          background: 'var(--field)',
+          borderRadius: 'var(--radius-md)',
+          color: 'var(--ink-3)',
+          fontSize: '0.875rem',
+          marginBottom: '20px',
+        }}
+      >
+        No category validation sweeps executed yet.
+      </div>
+    );
+  }
   return (
     <div className="validation-matrix-grid">
       {categories.map((cat) => {

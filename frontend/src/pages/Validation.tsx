@@ -13,7 +13,7 @@ import {
   ExternalLink,
   ChevronRight,
 } from 'lucide-react';
-import { api, type ValidationResult, type ValidationCheck } from '../api';
+import { api, type ValidationResult, type ValidationCheck, type Job } from '../api';
 import { ValidationScorecard } from '../components/validation/ValidationScorecard';
 import { ValidationMatrix, type MatrixCategoryItem } from '../components/validation/ValidationMatrix';
 import { StatusBadge } from '../components/ui/StatusBadge';
@@ -21,6 +21,7 @@ import { EmptyState } from '../components/ui/EmptyState';
 
 export default function Validation() {
   const { jobId } = useParams<{ jobId: string }>();
+  const [job, setJob] = useState<Job | null>(null);
   const [validation, setValidation] = useState<ValidationResult | null>(null);
   const [checks, setChecks] = useState<ValidationCheck[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<string | undefined>(undefined);
@@ -34,23 +35,26 @@ export default function Validation() {
       return;
     }
     setLoading(true);
-    api.getValidation(jobId)
-      .then((data) => {
-        setValidation(data);
-        setChecks(data.checks || []);
-        setLoading(false);
-      })
-      .catch(() => {
-        setChecks([]);
-        setLoading(false);
-      });
+    Promise.all([
+      api.getValidation(jobId).catch(() => null),
+      api.getJob(jobId).catch(() => null),
+    ]).then(([valData, jobData]) => {
+      if (valData) {
+        setValidation(valData);
+        setChecks(valData.checks || []);
+      }
+      if (jobData) {
+        setJob(jobData);
+      }
+      setLoading(false);
+    });
   }, [jobId]);
 
   const filteredChecks = checks.filter((c) => {
     const matchesSearch =
       (c.object_name && c.object_name.toLowerCase().includes(search.toLowerCase())) ||
-      c.message.toLowerCase().includes(search.toLowerCase()) ||
-      c.check_type.toLowerCase().includes(search.toLowerCase());
+      (c.message && c.message.toLowerCase().includes(search.toLowerCase())) ||
+      (c.check_type && c.check_type.toLowerCase().includes(search.toLowerCase()));
 
     const matchesCategory = !selectedCategory || c.category === selectedCategory;
 
@@ -64,6 +68,7 @@ export default function Validation() {
 
   const passedCount = checks.filter((c) => c.passed).length;
   const failedCount = checks.filter((c) => !c.passed).length;
+  const isApproved = validation?.auto_publish_ok === true;
 
   return (
     <div style={{ maxWidth: '1440px', margin: '0 auto' }}>
@@ -107,14 +112,14 @@ export default function Validation() {
                   gap: '6px',
                   padding: '4px 10px',
                   borderRadius: 'var(--radius-full)',
-                  background: 'var(--green-tint)',
-                  color: 'var(--green)',
+                  background: isApproved ? 'var(--green-tint)' : 'var(--yellow-tint)',
+                  color: isApproved ? 'var(--green)' : 'var(--yellow)',
                   fontSize: '0.75rem',
                   fontWeight: 700,
                 }}
               >
-                <CheckCircle2 size={13} />
-                <span>Auto-Publish Approved</span>
+                {isApproved ? <CheckCircle2 size={13} /> : <AlertTriangle size={13} />}
+                <span>{isApproved ? 'Auto-Publish Approved' : 'Review Required'}</span>
               </span>
             </div>
             <p style={{ fontSize: '0.875rem', color: 'var(--ink-2)', marginTop: '4px' }}>
@@ -125,7 +130,11 @@ export default function Validation() {
       </div>
 
       {/* ── 4-Tier Gate Scorecard ────────────────────────────────── */}
-      <ValidationScorecard autoPublishEligible={true} totalBlockers={0} />
+      <ValidationScorecard
+        job={job}
+        autoPublishEligible={validation?.auto_publish_ok}
+        totalBlockers={validation?.blocker_count ?? failedCount}
+      />
 
       {/* ── Validation Matrix (Parity by Functional Area) ────────── */}
       <div style={{ marginBottom: '24px' }}>
@@ -152,6 +161,7 @@ export default function Validation() {
         </div>
 
         <ValidationMatrix
+          checks={checks}
           selectedCategoryId={selectedCategory}
           onSelectCategory={(catId) =>
             setSelectedCategory(selectedCategory === catId ? undefined : catId)
