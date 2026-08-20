@@ -72,59 +72,37 @@ export default function Validation() {
 
   return (
     <div style={{ maxWidth: '1440px', margin: '0 auto' }}>
-      {/* ── Top Header ───────────────────────────────────────────── */}
-      <div style={{ marginBottom: '20px' }}>
-        <Link
-          to={`/jobs/${jobId}`}
-          className="btn btn-ghost"
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: '6px',
-            padding: '4px 8px',
-            fontSize: '0.8125rem',
-            color: 'var(--ink-2)',
-            marginBottom: '10px',
-          }}
-        >
-          <ArrowLeft size={14} />
-          <span>Back to Migration Control Center</span>
-        </Link>
-
+      {/* ── Header Controls ──────────────────────────────────────── */}
+      <div style={{ marginBottom: '16px' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <h1
-                style={{
-                  fontSize: '1.625rem',
-                  fontWeight: 700,
-                  color: 'var(--ink)',
-                  letterSpacing: '-0.02em',
-                  margin: 0,
-                }}
-              >
-                Validation Center &amp; Parity Matrix
-              </h1>
-              <span
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  padding: '4px 10px',
-                  borderRadius: 'var(--radius-full)',
-                  background: isApproved ? 'var(--green-tint)' : 'var(--yellow-tint)',
-                  color: isApproved ? 'var(--green)' : 'var(--yellow)',
-                  fontSize: '0.75rem',
-                  fontWeight: 700,
-                }}
-              >
-                {isApproved ? <CheckCircle2 size={13} /> : <AlertTriangle size={13} />}
-                <span>{isApproved ? 'Auto-Publish Approved' : 'Review Required'}</span>
-              </span>
-            </div>
-            <p style={{ fontSize: '0.875rem', color: 'var(--ink-2)', marginTop: '4px' }}>
-              Ground-truth verification against source MicroStrategy definitions and data warehouse SQL
-            </p>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <h2
+              style={{
+                fontSize: '1.25rem',
+                fontWeight: 700,
+                color: 'var(--ink)',
+                letterSpacing: '-0.02em',
+                margin: 0,
+              }}
+            >
+              Parity Verification &amp; Quality Gates
+            </h2>
+            <span
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '4px 10px',
+                borderRadius: 'var(--radius-full)',
+                background: isApproved ? 'var(--green-tint)' : 'var(--yellow-tint)',
+                color: isApproved ? 'var(--green)' : 'var(--yellow)',
+                fontSize: '0.75rem',
+                fontWeight: 700,
+              }}
+            >
+              {isApproved ? <CheckCircle2 size={13} /> : <AlertTriangle size={13} />}
+              <span>{isApproved ? 'Auto-Publish Approved' : 'Review Required'}</span>
+            </span>
           </div>
         </div>
       </div>

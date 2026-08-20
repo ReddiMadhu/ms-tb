@@ -72,41 +72,21 @@ export default function DashboardInventory() {
 
   return (
     <div style={{ maxWidth: '1440px', margin: '0 auto' }}>
-      {/* ── Top Header ───────────────────────────────────────────── */}
-      <div style={{ marginBottom: '20px' }}>
-        <Link
-          to={`/jobs/${jobId}`}
-          className="btn btn-ghost"
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: '6px',
-            padding: '4px 8px',
-            fontSize: '0.8125rem',
-            color: 'var(--ink-2)',
-            marginBottom: '10px',
-          }}
-        >
-          <ArrowLeft size={14} />
-          <span>Back to Migration Control Center</span>
-        </Link>
-
+      {/* ── Header Controls ──────────────────────────────────────── */}
+      <div style={{ marginBottom: '16px' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div>
-            <h1
+            <h2
               style={{
-                fontSize: '1.625rem',
+                fontSize: '1.25rem',
                 fontWeight: 700,
                 color: 'var(--ink)',
                 letterSpacing: '-0.02em',
                 margin: 0,
               }}
             >
-              Dashboard &amp; Dossier Inventory
-            </h1>
-            <p style={{ fontSize: '0.875rem', color: 'var(--ink-2)', marginTop: '4px' }}>
-              Reconstructed MicroStrategy dossiers converted into Tableau workbooks with worksheets and visual charts
-            </p>
+              Dossiers &amp; Workbooks ({dashboards.length} {dashboards.length === 1 ? 'Dossier' : 'Dossiers'})
+            </h2>
           </div>
         </div>
       </div>

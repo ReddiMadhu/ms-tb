@@ -251,12 +251,17 @@ async def list_objects(
     )
 
 
+from sqlalchemy import or_
+
 @router.get("/jobs/{job_id}/objects/{object_id}", response_model=ObjectResponse)
 async def get_object(job_id: str, object_id: str, db: Session = Depends(get_db)):
-    """GET /jobs/{id}/objects/{oid} — Get detailed object information."""
+    """GET /jobs/{id}/objects/{oid} — Get detailed object information by id or mstr_id."""
     obj = (
         db.query(MigrationObject)
-        .filter(MigrationObject.job_id == job_id, MigrationObject.id == object_id)
+        .filter(
+            MigrationObject.job_id == job_id,
+            or_(MigrationObject.id == object_id, MigrationObject.mstr_id == object_id),
+        )
         .first()
     )
     if not obj:

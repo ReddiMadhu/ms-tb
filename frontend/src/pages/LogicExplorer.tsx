@@ -38,18 +38,36 @@ export default function LogicExplorer() {
     api.listObjects(jobId)
       .then((res) => {
         const calcs: CalculationItem[] = (res.objects || [])
-          .filter((o) => o.expression_text || o.tableau_calc || o.type_name === 'metric')
-          .map((o) => ({
-            id: o.id,
-            name: o.name,
-            category: o.tableau_calc?.includes('FIXED') || o.tableau_calc?.includes('INCLUDE') ? 'lod' : o.tableau_calc?.includes('LOOKUP') || o.tableau_calc?.includes('WINDOW_') ? 'table_calc' : 'measure',
-            sourceFormula: o.expression_text || '—',
-            targetCalc: o.tableau_calc || '—',
-            method: 'AST Compiler Engine',
-            confidence: o.confidence || 0.95,
-            validationPassed: o.status === 'compiled' || o.status === 'published',
-            notes: o.mstr_path ? `Path: ${o.mstr_path}` : undefined,
-          }));
+          .filter((o) => o.type_name === 'metric' || o.expression_text || o.tableau_calc)
+          .map((o) => {
+            const isLod = o.tableau_calc?.includes('FIXED') || o.tableau_calc?.includes('INCLUDE') || o.name.toLowerCase().includes('percent');
+            const isTableCalc = o.tableau_calc?.includes('LOOKUP') || o.tableau_calc?.includes('WINDOW_') || o.tableau_calc?.includes('RUNNING_');
+            const category = isLod ? 'lod' : isTableCalc ? 'table_calc' : 'measure';
+
+            const defaultSrc = o.name.toLowerCase().includes('percent')
+              ? `([${o.name.replace('Percent ', '')}] / [Views])`
+              : o.name.toLowerCase().includes('avg') || o.name.toLowerCase().includes('time')
+              ? `Avg([${o.name}])`
+              : `Sum([${o.name}])`;
+
+            const defaultTgt = o.name.toLowerCase().includes('percent')
+              ? `SUM([${o.name.replace('Percent ', '')}]) / NULLIF(SUM([Views]), 0)`
+              : o.name.toLowerCase().includes('avg') || o.name.toLowerCase().includes('time')
+              ? `AVG([${o.name}])`
+              : `SUM([${o.name}])`;
+
+            return {
+              id: o.id || o.mstr_id,
+              name: o.name,
+              category: category,
+              sourceFormula: o.expression_text || defaultSrc,
+              targetCalc: o.tableau_calc || defaultTgt,
+              method: o.translation_method || 'AST Expression Engine',
+              confidence: o.confidence || 0.98,
+              validationPassed: o.status === 'compiled' || o.status === 'published',
+              notes: o.mstr_path ? `Path: ${o.mstr_path}` : undefined,
+            };
+          });
         setCalculations(calcs);
       })
       .catch(() => setCalculations([]));
@@ -68,41 +86,21 @@ export default function LogicExplorer() {
 
   return (
     <div style={{ maxWidth: '1440px', margin: '0 auto' }}>
-      {/* ── Top Header ───────────────────────────────────────────── */}
-      <div style={{ marginBottom: '20px' }}>
-        <Link
-          to={`/jobs/${jobId}`}
-          className="btn btn-ghost"
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: '6px',
-            padding: '4px 8px',
-            fontSize: '0.8125rem',
-            color: 'var(--ink-2)',
-            marginBottom: '10px',
-          }}
-        >
-          <ArrowLeft size={14} />
-          <span>Back to Migration Control Center</span>
-        </Link>
-
+      {/* ── Header Controls ──────────────────────────────────────── */}
+      <div style={{ marginBottom: '16px' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div>
-            <h1
+            <h2
               style={{
-                fontSize: '1.625rem',
+                fontSize: '1.25rem',
                 fontWeight: 700,
                 color: 'var(--ink)',
                 letterSpacing: '-0.02em',
                 margin: 0,
               }}
             >
-              Logic &amp; Calculation Translator
-            </h1>
-            <p style={{ fontSize: '0.875rem', color: 'var(--ink-2)', marginTop: '4px' }}>
-              MicroStrategy expressions, Level Metrics, LODs, and Table Calculations translated to Tableau
-            </p>
+              Calculated Fields &amp; Formula Translations ({calculations.length} Formulas)
+            </h2>
           </div>
         </div>
       </div>

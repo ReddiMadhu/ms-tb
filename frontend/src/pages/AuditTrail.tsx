@@ -71,18 +71,15 @@ export default function AuditTrail() {
           <div>
             <h1
               style={{
-                fontSize: '1.625rem',
+                fontSize: '1.5rem',
                 fontWeight: 700,
                 color: 'var(--ink)',
                 letterSpacing: '-0.02em',
                 margin: 0,
               }}
             >
-              Audit Trail &amp; Execution Telemetry
+              Audit Trail &amp; Telemetry Log ({events.length} Events)
             </h1>
-            <p style={{ fontSize: '0.875rem', color: 'var(--ink-2)', marginTop: '4px' }}>
-              Immutable audit log of all REST calls, extraction events, AST compiles, and validation checks
-            </p>
           </div>
 
           <button

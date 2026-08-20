@@ -54,29 +54,12 @@ export default function MigrationReport() {
   return (
     <div style={{ maxWidth: '1100px', margin: '0 auto', paddingBottom: '60px' }}>
       {/* ── Top Header ───────────────────────────────────────────── */}
-      <div style={{ marginBottom: '24px' }}>
-        <Link
-          to={`/jobs/${jobId}`}
-          className="btn btn-ghost"
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: '6px',
-            padding: '4px 8px',
-            fontSize: '0.8125rem',
-            color: 'var(--ink-2)',
-            marginBottom: '10px',
-          }}
-        >
-          <ArrowLeft size={14} />
-          <span>Back to Migration Control Center</span>
-        </Link>
-
+      <div style={{ marginBottom: '20px' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div>
-            <h1
+            <h2
               style={{
-                fontSize: '1.625rem',
+                fontSize: '1.25rem',
                 fontWeight: 700,
                 color: 'var(--ink)',
                 letterSpacing: '-0.02em',
@@ -84,10 +67,7 @@ export default function MigrationReport() {
               }}
             >
               Migration Executive Summary &amp; Audit Report
-            </h1>
-            <p style={{ fontSize: '0.875rem', color: 'var(--ink-2)', marginTop: '4px' }}>
-              Comprehensive stakeholder audit document for MicroStrategy to Tableau migration verification
-            </p>
+            </h2>
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -98,7 +78,7 @@ export default function MigrationReport() {
                 display: 'inline-flex',
                 alignItems: 'center',
                 gap: '6px',
-                padding: '8px 14px',
+                padding: '6px 12px',
                 fontSize: '0.8125rem',
               }}
             >
@@ -115,7 +95,7 @@ export default function MigrationReport() {
           background: 'var(--surface)',
           border: '1px solid var(--line)',
           borderRadius: 'var(--radius-lg)',
-          padding: '36px',
+          padding: '32px',
           boxShadow: 'var(--shadow-card)',
         }}
       >
@@ -124,24 +104,24 @@ export default function MigrationReport() {
           style={{
             display: 'flex',
             justifyContent: 'space-between',
-            paddingBottom: '20px',
-            borderBottom: '2px solid var(--line)',
-            marginBottom: '28px',
+            paddingBottom: '16px',
+            borderBottom: '1px solid var(--line)',
+            marginBottom: '24px',
           }}
         >
           <div>
-            <div style={{ fontSize: '1.25rem', fontWeight: 700, color: 'var(--ink)' }}>
+            <div style={{ fontSize: '1.125rem', fontWeight: 700, color: 'var(--ink)' }}>
               {job?.name || 'Enterprise BI Migration'}
             </div>
-            <div style={{ fontSize: '0.8125rem', color: 'var(--ink-2)', marginTop: '4px' }}>
-              Generated Date: {new Date().toLocaleDateString('en-US', { dateStyle: 'long' })}
+            <div style={{ fontSize: '0.8125rem', color: 'var(--ink-2)', marginTop: '2px' }}>
+              Generated: {new Date().toLocaleDateString('en-US', { dateStyle: 'long' })} &bull; Job ID: <span className="mono">{jobId}</span>
             </div>
           </div>
 
           <div style={{ textAlign: 'right' }}>
             <span
               style={{
-                padding: '6px 12px',
+                padding: '4px 10px',
                 borderRadius: 'var(--radius-full)',
                 background: isComplete ? 'var(--green-tint)' : 'var(--blue-tint)',
                 color: isComplete ? 'var(--green)' : 'var(--blue)',
@@ -149,22 +129,34 @@ export default function MigrationReport() {
                 fontSize: '0.8125rem',
               }}
             >
-              {isComplete ? '100% Verified Production Parity' : `Status: ${job?.status || 'In Progress'}`}
+              {isComplete ? 'Verified Production Parity' : `Status: ${job?.status || 'In Progress'}`}
             </span>
           </div>
         </div>
 
-        {/* Section 1: Executive Summary */}
-        <div style={{ marginBottom: '32px' }}>
-          <h2 style={{ fontSize: '1.125rem', fontWeight: 700, color: 'var(--ink)', marginBottom: '12px' }}>
-            1. Executive Summary
-          </h2>
-          <p style={{ fontSize: '0.875rem', color: 'var(--ink-2)', lineHeight: 1.6, margin: 0 }}>
-            This audit report validates the automated reverse-engineering and semantic reconstruction
-            of MicroStrategy business intelligence assets into Tableau Server {job?.template_version || '2024.2'}. All {totalObjs} discovered objects,
-            metrics, LOD expressions, underlying database relationship schemas, and worksheet visual
-            charts have undergone multi-tier algorithmic validation and ground-truth parity comparison.
-          </p>
+        {/* Section 1: Executive KPI Metrics */}
+        <div style={{ marginBottom: '28px' }}>
+          <h3 style={{ fontSize: '0.9375rem', fontWeight: 700, color: 'var(--ink)', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+            1. Migration Overview &amp; Execution Metrics
+          </h3>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px' }}>
+            <div style={{ padding: '12px', background: 'var(--field)', borderRadius: 'var(--radius-md)', border: '1px solid var(--line)' }}>
+              <div style={{ fontSize: '0.75rem', color: 'var(--ink-3)', fontWeight: 600 }}>TOTAL OBJECTS</div>
+              <div style={{ fontSize: '1.25rem', fontWeight: 700, color: 'var(--ink)', marginTop: '2px' }}>{totalObjs}</div>
+            </div>
+            <div style={{ padding: '12px', background: 'var(--field)', borderRadius: 'var(--radius-md)', border: '1px solid var(--line)' }}>
+              <div style={{ fontSize: '0.75rem', color: 'var(--ink-3)', fontWeight: 600 }}>RECONSTRUCTED</div>
+              <div style={{ fontSize: '1.25rem', fontWeight: 700, color: 'var(--green)', marginTop: '2px' }}>{processedObjs - failedObjs}</div>
+            </div>
+            <div style={{ padding: '12px', background: 'var(--field)', borderRadius: 'var(--radius-md)', border: '1px solid var(--line)' }}>
+              <div style={{ fontSize: '0.75rem', color: 'var(--ink-3)', fontWeight: 600 }}>ISSUES / BLOCKERS</div>
+              <div style={{ fontSize: '1.25rem', fontWeight: 700, color: failedObjs > 0 ? 'var(--yellow)' : 'var(--ink)', marginTop: '2px' }}>{failedObjs}</div>
+            </div>
+            <div style={{ padding: '12px', background: 'var(--field)', borderRadius: 'var(--radius-md)', border: '1px solid var(--line)' }}>
+              <div style={{ fontSize: '0.75rem', color: 'var(--ink-3)', fontWeight: 600 }}>TARGET PLATFORM</div>
+              <div style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--ink)', marginTop: '4px' }}>Tableau {job?.template_version || '2024.2'}</div>
+            </div>
+          </div>
         </div>
 
         {/* Section 2: Environment Topology */}
