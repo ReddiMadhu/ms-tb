@@ -271,7 +271,7 @@ const DEFAULT_CONVERSION_CARDS: ConversionCardItem[] = [
 
 export default function DashboardInventory() {
   const { jobId } = useParams<{ jobId: string }>();
-  const [dossierName, setDossierName] = useState<string>('Marketing Campaigns Dossier');
+  const [dossierName, setDossierName] = useState<string>('Dossier Inventory');
   const [visuals, setVisuals] = useState<ConversionCardItem[]>(DEFAULT_CONVERSION_CARDS);
   const [activeTab, setActiveTab] = useState<'CARDS' | 'TABLE'>('CARDS');
   const [searchQuery, setSearchQuery] = useState('');

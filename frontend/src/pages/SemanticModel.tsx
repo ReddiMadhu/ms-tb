@@ -26,7 +26,7 @@ interface ColumnDef {
 export default function SemanticModel() {
   const { jobId } = useParams<{ jobId: string }>();
   const [columns, setColumns] = useState<ColumnDef[]>([]);
-  const [cubeName, setCubeName] = useState<string>('A.Marketing_Campaign_AI_M');
+  const [cubeName, setCubeName] = useState<string>('Semantic Data Model');
   const [activeTab, setActiveTab] = useState<'all' | 'dimension' | 'measure'>('all');
   const [search, setSearch] = useState<string>('');
 

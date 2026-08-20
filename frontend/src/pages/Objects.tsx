@@ -68,8 +68,8 @@ export default function Objects() {
   const attributes = useMemo(() => objects.filter(o => o.type_name === 'attribute'), [objects]);
   const metrics = useMemo(() => objects.filter(o => o.type_name === 'metric'), [objects]);
 
-  const cubeName = cubes[0]?.name || 'A.Marketing_Campaign_AI_M';
-  const dossierName = dossiers[0]?.name || 'Marketing Campaigns';
+  const cubeName = cubes[0]?.name || 'Semantic Model';
+  const dossierName = dossiers[0]?.name || 'Dossier Workspace';
 
 
   const [vizPlanWorksheets, setVizPlanWorksheets] = useState<any[]>([]);

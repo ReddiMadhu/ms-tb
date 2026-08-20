@@ -84,6 +84,7 @@ class IRMeasure:
     caption: str
     tableau_calc: str
     expression_text: Optional[str] = None
+    precomputed_calc: Optional[str] = None   # set for managed metrics — skip re-compilation
     confidence: float = 1.0
     scope: str = "local"       # "shared" | "local" (ADR-027)
     fingerprint_hash: Optional[str] = None
@@ -111,6 +112,8 @@ class IRVisual:
     color: Optional[str] = None
     size: Optional[str] = None
     filters: list[str] = field(default_factory=list)
+    chapter_name: Optional[str] = None
+    page_name: Optional[str] = None
 
 
 @dataclass
@@ -362,12 +365,18 @@ class IRCompilerAgent:
         Compile MSTR metric expression into Tableau calculated field syntax.
 
         Handles:
+        - Pre-computed expressions from managed metrics (bypasses AST/text parsing)
         - Simple aggregations (SUM, COUNT, AVG, etc.)
         - Arithmetic operators
         - Null propagation policy (ZN wrapping)
         - Zero division handling (IIF wrapping)
         - Dimty → LOD expression mapping
         """
+        # ── Fast path: pre-computed calc (managed metrics, ADR-032) ──
+        # Managed metrics provide a ready-made Tableau calc derived from subtotalType.
+        if getattr(measure, "precomputed_calc", None):
+            return measure.precomputed_calc
+
         ast = measure.expression_ast
         expr_text = measure.expression_text
 
@@ -564,17 +573,32 @@ class IRCompilerAgent:
     def _register_caption(
         self, ir_id: str, local_name: str, remote_name: str, caption: str, mstr_name: str
     ):
-        """Register field caption in the CaptionRegistry."""
-        entry = CaptionRegistry(
-            job_id=self.job.id,
-            datasource_id="default",
-            ir_id=ir_id,
-            local_name=local_name,
-            remote_name=remote_name,
-            caption=caption,
-            mstr_name=mstr_name,
+        """Register field caption in the CaptionRegistry (idempotent)."""
+        existing = (
+            self.db.query(CaptionRegistry)
+            .filter(
+                CaptionRegistry.job_id == self.job.id,
+                CaptionRegistry.datasource_id == "default",
+                CaptionRegistry.caption == caption,
+            )
+            .first()
         )
-        self.db.add(entry)
+        if existing:
+            existing.ir_id = ir_id
+            existing.local_name = local_name
+            existing.remote_name = remote_name
+            existing.mstr_name = mstr_name
+        else:
+            entry = CaptionRegistry(
+                job_id=self.job.id,
+                datasource_id="default",
+                ir_id=ir_id,
+                local_name=local_name,
+                remote_name=remote_name,
+                caption=caption,
+                mstr_name=mstr_name,
+            )
+            self.db.add(entry)
 
     # ── Identifier normalization ────────────────────────────────
 

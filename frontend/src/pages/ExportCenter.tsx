@@ -21,6 +21,13 @@ export default function ExportCenter() {
   const [artifacts, setArtifacts] = useState<ArtifactItem[]>([]);
   const [activeTab, setActiveTab] = useState<'ARTIFACTS' | 'XML_PREVIEW'>('ARTIFACTS');
   const [copiedXml, setCopiedXml] = useState(false);
+  const [tdsXml, setTdsXml] = useState<string>(`<?xml version='1.0' encoding='utf-8' ?>
+<datasource formatted-name='Migrated_DS' inline='true' version='18.1' xmlns:user='http://www.tableausoftware.com/xml/user'>
+  <document-location>
+    <connection-info class='hyper' filename='Migrated_DS.hyper' table='Extract' />
+  </document-location>
+  <!-- Schema Mappings from MicroStrategy Data Model -->
+</datasource>`);
 
   useEffect(() => {
     if (!jobId) return;
@@ -32,6 +39,19 @@ export default function ExportCenter() {
           ? raw.filter((a) => !(a.environment === 'staging' && (a.file_name || '').endsWith('.twbx')))
           : raw;
         setArtifacts(filtered);
+
+        // Fetch real TDS XML if available
+        const tdsArt = raw.find((a) => (a.file_name || '').endsWith('.tds') || a.type === 'datasource');
+        if (tdsArt) {
+          fetch(`/api/v1/jobs/${jobId}/download/${tdsArt.id}`)
+            .then((r) => (r.ok ? r.text() : ''))
+            .then((text) => {
+              if (text && text.includes('<datasource')) {
+                setTdsXml(text);
+              }
+            })
+            .catch(() => {});
+        }
       })
       .catch(() => setArtifacts([]));
     api.getJob(jobId).then((j) => setJob(j)).catch(() => setJob(null));
@@ -40,34 +60,14 @@ export default function ExportCenter() {
   const targetProject = job?.tableau_target_project || 'Migrated Dashboards';
   const targetVersion = job?.template_version || '2024.2';
 
-  const mockTdsXml = `<?xml version='1.0' encoding='utf-8' ?>
-<datasource formatted-name='Migrated_DS' inline='true' version='18.1' xmlns:user='http://www.tableausoftware.com/xml/user'>
-  <document-location>
-    <connection-info class='hyper' filename='Migrated_DS.hyper' table='Extract' />
-  </document-location>
-  <!-- Schema Mappings from MicroStrategy Cube -->
-  <column caption='Campaign' datatype='string' name='[Campaign]' role='dimension' type='nominal' />
-  <column caption='Article Name' datatype='string' name='[Article Name]' role='dimension' type='nominal' />
-  <column caption='Date' datatype='date' name='[Date]' role='dimension' type='ordinal' />
-  <column caption='Direct Visits' datatype='integer' name='[Direct Visits]' role='measure' type='quantitative'>
-    <calculation class='tableau' formula='SUM([Direct Visits])' />
-  </column>
-  <column caption='Paid Clicks' datatype='integer' name='[Paid Clicks]' role='measure' type='quantitative'>
-    <calculation class='tableau' formula='SUM([Paid Clicks])' />
-  </column>
-  <column caption='Percent Paid Clicks' datatype='real' name='[Percent Paid Clicks]' role='measure' type='quantitative'>
-    <calculation class='tableau' formula='SUM([Paid Clicks]) / NULLIF(SUM([Views]), 0)' />
-  </column>
-</datasource>`;
-
   const copyXml = () => {
-    navigator.clipboard.writeText(mockTdsXml);
+    navigator.clipboard.writeText(tdsXml);
     setCopiedXml(true);
     setTimeout(() => setCopiedXml(false), 2000);
   };
 
   const downloadXml = () => {
-    const blob = new Blob([mockTdsXml], { type: 'application/xml' });
+    const blob = new Blob([tdsXml], { type: 'application/xml' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -243,7 +243,7 @@ export default function ExportCenter() {
             fontFamily: 'var(--font-mono)', color: 'var(--ink)', background: 'var(--field)',
             maxHeight: '550px', overflowY: 'auto', whiteSpace: 'pre-wrap',
           }}>
-            {mockTdsXml}
+            {tdsXml}
           </pre>
         </div>
       )}

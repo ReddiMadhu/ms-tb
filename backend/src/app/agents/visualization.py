@@ -8,36 +8,52 @@ and generates WorksheetSpec/DashboardSpec for the emitter.
 """
 
 import logging
+import re
 import uuid
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
 
-# MSTR viz type → Tableau mark type mapping
+# MSTR viz type -> Tableau mark type mapping
 VIZ_TYPE_MAP = {
     "grid": "text",
     "crosstab": "text",
     "vertical_bar": "bar",
     "horizontal_bar": "bar",
+    "bar": "bar",
+    "bar_chart": "bar",
+    "stacked_bar": "bar",
+    "column": "bar",
     "line": "line",
+    "line_chart": "line",
     "area": "area",
+    "area_chart": "area",
     "pie": "pie",
+    "pie_chart": "pie",
+    "donut": "pie",
+    "donut_chart": "pie",
     "kpi": "text",
     "metric_value": "text",
+    "card": "text",
     "scatter": "circle",
+    "scatter_chart": "circle",
+    "bubble": "circle",
+    "bubble_chart": "circle",
     "map": "map",
+    "geo": "map",
     "heat_map": "square",
+    "heatmap": "square",
     "treemap": "square",
     "waterfall": "ganttBar",
     "combo": "bar",
-    "bubble": "circle",
+    "combo_chart": "bar",
     "histogram": "bar",
     "box_plot": "circle",
     "funnel": "bar",
     "gauge": "text",
-    "donut": "pie",
+    "microcharts": "line",
     "network": "circle",
     "unknown": "text",
 }
@@ -100,7 +116,7 @@ class VisualizationAgent:
     """
     Agent 6: Maps MSTR dossier visuals to Tableau worksheet/dashboard specs.
 
-    Uses static viz type mapping with shelf assignment heuristics.
+    Uses dynamic viz type mapping with intelligent shelf assignment heuristics.
     """
 
     def __init__(self, ir):
@@ -110,7 +126,7 @@ class VisualizationAgent:
         """Generate VizPlan from IR visuals."""
         result = VizPlan()
         # Clean and deduplicate worksheet names
-        seen_names = {}
+        seen_names: dict[str, int] = {}
         for visual in self.ir.visuals:
             clean_name = (getattr(visual, "name", "") or "Sheet").strip()
             if clean_name in seen_names:
@@ -132,39 +148,36 @@ class VisualizationAgent:
                     name=measure.name,
                     datasource_ref="default",
                     mark_type="text",
-                    rows=[FieldRef(name=measure.caption, field_type="measure")],
+                    rows=[FieldRef(name=measure.caption or measure.name, field_type="measure")],
                 )
                 result.worksheets.append(ws)
 
         # Create dashboards matching MSTR chapters/pages
         if result.worksheets:
-            ws_names = [ws.name for ws in result.worksheets if not ws.is_failed]
-            
-            # Check if this dossier has Campaign Overview and Article Analysis pages
-            page1_sheets = [name for name in ws_names if "articles" in name.lower() or "top 5" in name.lower()]
-            page2_sheets = [name for name in ws_names if name not in page1_sheets]
+            pages_to_sheets: dict[str, list[str]] = {}
+            for visual, ws in zip(self.ir.visuals, result.worksheets):
+                if ws.is_failed:
+                    continue
+                p_name = getattr(visual, "page_name", None) or getattr(visual, "chapter_name", None)
+                if p_name:
+                    pages_to_sheets.setdefault(p_name.strip(), []).append(ws.name)
 
-            if page1_sheets and page2_sheets:
-                result.dashboards.append(DashboardSpec(
-                    id=str(uuid.uuid4()),
-                    name="Campaign Overview",
-                    worksheets=page1_sheets,
-                    layout="auto-tiled",
-                ))
-                result.dashboards.append(DashboardSpec(
-                    id=str(uuid.uuid4()),
-                    name="Article Analysis",
-                    worksheets=page2_sheets,
-                    layout="auto-tiled",
-                ))
+            if pages_to_sheets:
+                for page_name, sheet_names in pages_to_sheets.items():
+                    result.dashboards.append(DashboardSpec(
+                        id=str(uuid.uuid4()),
+                        name=page_name,
+                        worksheets=sheet_names,
+                        layout="auto-tiled",
+                    ))
             else:
-                dashboard = DashboardSpec(
+                ws_names = [ws.name for ws in result.worksheets if not ws.is_failed]
+                result.dashboards.append(DashboardSpec(
                     id=str(uuid.uuid4()),
-                    name="Campaign Overview",
+                    name="Overview",
                     worksheets=ws_names,
                     layout="auto-tiled",
-                )
-                result.dashboards.append(dashboard)
+                ))
 
         logger.info(
             "VizPlan: %d worksheets, %d dashboards",
@@ -174,19 +187,20 @@ class VisualizationAgent:
 
     def _plan_worksheet(self, visual) -> WorksheetSpec:
         """Plan a single worksheet from an IR visual."""
-        mstr_type = getattr(visual, "mark_type", "unknown").lower()
-        tableau_mark = VIZ_TYPE_MAP.get(mstr_type, "text")
+        raw_type = (getattr(visual, "mark_type", "unknown") or "unknown").lower().replace("-", "_").replace(" ", "_")
+        tableau_mark = VIZ_TYPE_MAP.get(raw_type, "text")
 
         # Shelf assignments
-        rows = []
-        columns = []
-        color = None
-        size = None
-        label = None
+        rows: list[FieldRef] = []
+        columns: list[FieldRef] = []
+        color: Optional[FieldRef] = None
+        size: Optional[FieldRef] = None
+        label: Optional[FieldRef] = None
+        detail: list[FieldRef] = []
 
-        # Map fields to shelves based on mark type
-        vis_rows = getattr(visual, "rows", [])
-        vis_cols = getattr(visual, "columns", [])
+        # Map fields to shelves based on explicit visual definitions if present
+        vis_rows = getattr(visual, "rows", []) or []
+        vis_cols = getattr(visual, "columns", []) or []
 
         for field_name in vis_rows:
             rows.append(FieldRef(name=field_name))
@@ -200,96 +214,100 @@ class VisualizationAgent:
         if hasattr(visual, "size") and visual.size:
             size = FieldRef(name=visual.size, field_type="measure")
 
-        # Horizontal bar → swap rows and columns
-        if mstr_type == "horizontal_bar":
-            rows, columns = columns, rows
-
         # If visual has no explicit rows/columns, infer meaningful shelves from IR dimensions & measures
-        if not rows and not columns:
+        if not rows and not columns and not label:
             dims = [d for d in getattr(self.ir, "dimensions", []) if not getattr(d, "hidden", False)]
             measures = getattr(self.ir, "measures", [])
+            vis_title = (getattr(visual, "name", "") or "").strip()
+            vis_clean = vis_title.lower()
 
-            vis_clean = (getattr(visual, "name", "") or "").strip().lower()
+            matched_measure = self._match_measure_for_visual(vis_clean, measures)
+            matched_dim = self._match_dimension_for_visual(vis_clean, dims)
 
-            # Try to match a specific measure by visual name.
-            # Priority: exact name > exact caption > substring (excluding Percent/Ratio mismatch)
-            matched_measure = None
-            # Pass 1: Exact match
-            for m in measures:
-                m_name = (getattr(m, "name", "") or "").lower()
-                m_cap = (getattr(m, "caption", "") or "").lower()
-                if vis_clean and (m_name == vis_clean or m_cap == vis_clean):
-                    matched_measure = m
-                    break
+            # Date/Time dimension preference for trends/times
+            date_dim = next(
+                (d for d in dims if any(k in d.name.lower() for k in ["date", "time", "month", "year", "day"])),
+                None,
+            )
+            other_dims = [d for d in dims if d != matched_dim and d != date_dim]
+            secondary_dim = other_dims[0] if other_dims else None
 
-            # Pass 2: Substring match, but skip Percent/Ratio variants when visual doesn't say "percent"
-            if not matched_measure:
-                vis_wants_percent = vis_clean.startswith("percent")
-                for m in measures:
-                    m_name = (getattr(m, "name", "") or "").lower()
-                    m_cap = (getattr(m, "caption", "") or "").lower()
-                    is_percent_measure = m_name.startswith("percent") or "ratio" in m_name
-                    # Skip percent measures when visual isn't asking for percent
-                    if not vis_wants_percent and is_percent_measure:
-                        continue
-                    if vis_clean and (m_name in vis_clean or vis_clean in m_name or m_cap in vis_clean or vis_clean in m_cap):
-                        matched_measure = m
-                        break
-
-            if not matched_measure and measures:
-                matched_measure = measures[0]
-
-            primary_dim = dims[0] if dims else None
-            art_dim = next((d for d in dims if "article name" in d.name.lower() and "short" not in d.name.lower()), primary_dim)
-            date_dim = next((d for d in dims if "date" in d.name.lower() or "time" in d.name.lower()), primary_dim)
-
-            if "views by source" in vis_clean:
-                # Stacked bar: Date on Columns, Views on Rows
-                views_meas = next((m for m in measures if "views" in m.name.lower()), matched_measure)
-                if date_dim:
-                    columns.append(FieldRef(name=date_dim.caption or date_dim.name, field_type="dimension"))
-                if views_meas:
-                    rows.append(FieldRef(name=views_meas.caption or views_meas.name, field_type="measure"))
-                camp_dim = next((d for d in dims if "campaign" in d.name.lower() or "type" in d.name.lower()), None)
-                if camp_dim:
-                    color = FieldRef(name=camp_dim.caption or camp_dim.name, field_type="dimension")
-                tableau_mark = "bar"
-
-            elif "top 5 lm" in vis_clean:
-                # Horizontal bar: Article Name on Rows, Metric on Columns
-                if art_dim:
-                    rows.append(FieldRef(name=art_dim.caption or art_dim.name, field_type="dimension"))
-                if not hasattr(self, "_top5_counter"):
-                    self._top5_counter = 0
-                self._top5_counter += 1
-                if self._top5_counter % 2 == 1:
-                    metric = next((m for m in measures if "unique" in m.name.lower() or "users" in m.name.lower()), matched_measure)
-                else:
-                    metric = next((m for m in measures if "searched" in m.name.lower() and "percent" not in m.name.lower()), matched_measure)
-                if metric:
-                    columns.append(FieldRef(name=metric.caption or metric.name, field_type="measure"))
-                tableau_mark = "bar"
-
-            elif "article details" in vis_clean:
-                # Detail grid: Article Name on Rows, Views on Text label
-                if art_dim:
-                    rows.append(FieldRef(name=art_dim.caption or art_dim.name, field_type="dimension"))
-                views_meas = next((m for m in measures if "views" in m.name.lower()), matched_measure)
-                if views_meas:
-                    label = FieldRef(name=views_meas.caption or views_meas.name, field_type="measure")
-                tableau_mark = "text"
-
-            elif "articles" in vis_clean:
-                # KPI Card: Views on text label
-                views_meas = next((m for m in measures if "views" in m.name.lower()), matched_measure)
-                if views_meas:
-                    label = FieldRef(name=views_meas.caption or views_meas.name, field_type="measure")
-                tableau_mark = "text"
-
-            else:  # KPI Cards: Paid Clicks, Times Searched, Direct Visits, Social Media
+            if tableau_mark == "text" or raw_type in ("kpi", "metric_value", "gauge"):
+                # KPI Card: Measure value on Text label
                 if matched_measure:
                     label = FieldRef(name=matched_measure.caption or matched_measure.name, field_type="measure")
                 tableau_mark = "text"
+
+            elif tableau_mark == "bar":
+                # Bar Chart: Dimension on Rows, Measure on Columns
+                dim_to_use = matched_dim or (dims[0] if dims else None)
+                meas_to_use = matched_measure or (measures[0] if measures else None)
+                if dim_to_use:
+                    rows.append(FieldRef(name=dim_to_use.caption or dim_to_use.name, field_type="dimension"))
+                if meas_to_use:
+                    columns.append(FieldRef(name=meas_to_use.caption or meas_to_use.name, field_type="measure"))
+                if secondary_dim and any(k in vis_clean for k in ["mix", "segment", "breakdown", "by"]):
+                    color = FieldRef(name=secondary_dim.caption or secondary_dim.name, field_type="dimension")
+
+            elif tableau_mark == "pie":
+                # Donut / Pie: Slice Dimension on Color, Measure on Size & Text Label
+                dim_to_use = matched_dim or (dims[0] if dims else None)
+                meas_to_use = matched_measure or (measures[0] if measures else None)
+                if dim_to_use:
+                    color = FieldRef(name=dim_to_use.caption or dim_to_use.name, field_type="dimension")
+                if meas_to_use:
+                    size = FieldRef(name=meas_to_use.caption or meas_to_use.name, field_type="measure")
+                    label = FieldRef(name=meas_to_use.caption or meas_to_use.name, field_type="measure")
+
+            elif tableau_mark == "line":
+                # Line / Trend Chart: Date Dimension on Columns, Measure on Rows
+                dim_to_use = date_dim or matched_dim or (dims[0] if dims else None)
+                meas_to_use = matched_measure or (measures[0] if measures else None)
+                if dim_to_use:
+                    columns.append(FieldRef(name=dim_to_use.caption or dim_to_use.name, field_type="dimension"))
+                if meas_to_use:
+                    rows.append(FieldRef(name=meas_to_use.caption or meas_to_use.name, field_type="measure"))
+                if secondary_dim and "trend" in vis_clean:
+                    color = FieldRef(name=secondary_dim.caption or secondary_dim.name, field_type="dimension")
+
+            elif tableau_mark in ("circle", "square"):
+                # Scatter / Bubble / Heatmap
+                dim_to_use = matched_dim or (dims[0] if dims else None)
+                meas_to_use = matched_measure or (measures[0] if measures else None)
+                other_meas = [m for m in measures if m != meas_to_use]
+                second_meas = other_meas[0] if other_meas else None
+
+                if second_meas:
+                    columns.append(FieldRef(name=meas_to_use.caption or meas_to_use.name, field_type="measure"))
+                    rows.append(FieldRef(name=second_meas.caption or second_meas.name, field_type="measure"))
+                    if dim_to_use:
+                        detail.append(FieldRef(name=dim_to_use.caption or dim_to_use.name, field_type="dimension"))
+                        color = FieldRef(name=dim_to_use.caption or dim_to_use.name, field_type="dimension")
+                else:
+                    if dim_to_use:
+                        rows.append(FieldRef(name=dim_to_use.caption or dim_to_use.name, field_type="dimension"))
+                    if meas_to_use:
+                        columns.append(FieldRef(name=meas_to_use.caption or meas_to_use.name, field_type="measure"))
+
+            elif tableau_mark == "map":
+                geo_dim = next(
+                    (d for d in dims if any(k in d.name.lower() for k in ["state", "country", "city", "region", "zip", "geo"])),
+                    matched_dim,
+                )
+                meas_to_use = matched_measure or (measures[0] if measures else None)
+                if geo_dim:
+                    detail.append(FieldRef(name=geo_dim.caption or geo_dim.name, field_type="dimension"))
+                if meas_to_use:
+                    color = FieldRef(name=meas_to_use.caption or meas_to_use.name, field_type="measure")
+
+            else:
+                # Default / Grid: Dimension on Rows, Measure on Label
+                dim_to_use = matched_dim or (dims[0] if dims else None)
+                meas_to_use = matched_measure or (measures[0] if measures else None)
+                if dim_to_use:
+                    rows.append(FieldRef(name=dim_to_use.caption or dim_to_use.name, field_type="dimension"))
+                if meas_to_use:
+                    label = FieldRef(name=meas_to_use.caption or meas_to_use.name, field_type="measure")
 
         # Filters
         filters = []
@@ -306,5 +324,92 @@ class VisualizationAgent:
             color=color,
             size=size,
             label=label,
+            detail=detail,
             filters=filters,
         )
+
+    @staticmethod
+    def _match_measure_for_visual(vis_clean: str, measures: list) -> Optional[Any]:
+        """Find the measure that best matches keywords in the visual title."""
+        if not measures:
+            return None
+        # Priority 1: Exact match on name or caption
+        for m in measures:
+            m_name = (getattr(m, "name", "") or "").lower()
+            m_cap = (getattr(m, "caption", "") or "").lower()
+            if (m_name and m_name == vis_clean) or (m_cap and m_cap == vis_clean):
+                return m
+
+        # Priority 2: Keyword overlap with visual title
+        best_measure = None
+        best_score = -1
+        vis_words = set(re.findall(r"\w+", vis_clean))
+
+        for m in measures:
+            m_name = (getattr(m, "name", "") or "").lower()
+            m_cap = (getattr(m, "caption", "") or "").lower()
+            m_words = set(re.findall(r"\w+", f"{m_name} {m_cap}"))
+            score = len(vis_words & m_words)
+
+            # Domain keyword bonuses
+            if ("loss" in vis_words or "incurred" in vis_words or "severity" in vis_words) and ("incurred" in m_words or "loss" in m_words):
+                score += 3
+            if "paid" in vis_words and "paid" in m_words:
+                score += 4
+            if "reserve" in vis_words and "reserve" in m_words:
+                score += 4
+            if "recovery" in vis_words and "recovery" in m_words:
+                score += 4
+            if "subrogation" in vis_words and "subrogation" in m_words:
+                score += 4
+            if "salvage" in vis_words and "salvage" in m_words:
+                score += 4
+            if ("resolution" in vis_words or "days" in vis_words or "time" in vis_words) and ("resolution" in m_words or "days" in m_words or "time" in m_words):
+                score += 4
+            if ("claim" in vis_words or "volume" in vis_words or "count" in vis_words or "total" in vis_words) and ("count" in m_words or "row" in m_words):
+                score += 3
+
+            if score > best_score:
+                best_score = score
+                best_measure = m
+
+        return best_measure if best_measure else measures[0]
+
+    @staticmethod
+    def _match_dimension_for_visual(vis_clean: str, dims: list) -> Optional[Any]:
+        """Find the dimension that best matches keywords in the visual title."""
+        if not dims:
+            return None
+        vis_words = set(re.findall(r"\w+", vis_clean))
+        best_dim = None
+        best_score = -1
+
+        for d in dims:
+            d_name = (getattr(d, "name", "") or "").lower()
+            d_cap = (getattr(d, "caption", "") or "").lower()
+            d_words = set(re.findall(r"\w+", f"{d_name} {d_cap}"))
+            score = len(vis_words & d_words)
+
+            # Keyword bonuses
+            if ("cause" in vis_words or "causes" in vis_words) and "cause" in d_words:
+                score += 4
+            if "status" in vis_words and "status" in d_words:
+                score += 4
+            if ("state" in vis_words or "states" in vis_words or "geography" in vis_words) and "state" in d_words:
+                score += 4
+            if "region" in vis_words and ("region" in d_words or "state" in d_words):
+                score += 3
+            if "coverage" in vis_words and "coverage" in d_words:
+                score += 4
+            if ("business" in vis_words or "lob" in vis_words or "policy" in vis_words) and "policy" in d_words:
+                score += 4
+            if ("date" in vis_words or "month" in vis_words or "trend" in vis_words or "year" in vis_words) and ("date" in d_words or "time" in d_words):
+                score += 4
+            if ("adjuster" in vis_words or "adjusters" in vis_words or "workload" in vis_words) and "adjuster" in d_words:
+                score += 4
+
+            if score > best_score:
+                best_score = score
+                best_dim = d
+
+        return best_dim if best_dim else (dims[0] if dims else None)

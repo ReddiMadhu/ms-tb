@@ -39,53 +39,21 @@ export default function ReviewQueue() {
     fetchTasks
       .then((res) => {
         const raw = res.tasks || [];
-        if (raw.length > 0) {
-          setIssues(
-            raw.map((t) => ({
-              id: t.id,
-              job_id: t.job_id,
-              object_id: t.object_id,
-              object_name: t.object_name || (t.object_id ? `Object ${t.object_id.slice(0, 8)}` : 'Object'),
-              object_type: t.object_type || 'metric',
-              severity: (t.severity as any) || 'warning',
-              reason: t.reason,
-              mstr_expression: t.mstr_expression,
-              generated_calc: t.generated_calc,
-              confidence: t.confidence,
-              status: (t.status as any) || 'pending',
-            }))
-          );
-        } else {
-          // Provide standard review items if none exist
-          setIssues([
-            {
-              id: 'rev-1',
-              job_id: jobId || '',
-              object_id: '725DCBD1884CEDC95A70E4AC39B4F8AE',
-              object_name: 'Percent Paid Clicks',
-              object_type: 'metric',
-              severity: 'info',
-              reason: 'Division by zero protection applied via NULLIF(SUM([Views]), 0).',
-              mstr_expression: '([Paid Clicks] / [Views])',
-              generated_calc: 'SUM([Paid Clicks]) / NULLIF(SUM([Views]), 0)',
-              confidence: 0.98,
-              status: 'approved',
-            },
-            {
-              id: 'rev-2',
-              job_id: jobId || '',
-              object_id: '742978A1604A7AE7C8C2879DEA6238D4',
-              object_name: 'A.Marketing_Campaign_AI_M',
-              object_type: 'cube',
-              severity: 'info',
-              reason: 'Direct relational mapping extracted to standalone Tableau Hyper data source.',
-              mstr_expression: 'Cube Grain: Campaign, Article, Date',
-              generated_calc: 'Migrated_DS.tds',
-              confidence: 1.0,
-              status: 'approved',
-            },
-          ]);
-        }
+        setIssues(
+          raw.map((t) => ({
+            id: t.id,
+            job_id: t.job_id,
+            object_id: t.object_id,
+            object_name: t.object_name || (t.object_id ? `Object ${t.object_id.slice(0, 8)}` : 'Object'),
+            object_type: t.object_type || 'metric',
+            severity: (t.severity as any) || 'warning',
+            reason: t.reason,
+            mstr_expression: t.mstr_expression,
+            generated_calc: t.generated_calc,
+            confidence: t.confidence,
+            status: (t.status as any) || 'pending',
+          }))
+        );
       })
       .catch(() => setIssues([]));
   }, [jobId]);

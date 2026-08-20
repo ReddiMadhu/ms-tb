@@ -389,6 +389,8 @@ class PipelineOrchestrator:
                             columns=columns,
                             color=color_field,
                             size=size_field,
+                            chapter_name=chapter.get("name"),
+                            page_name=page.get("name"),
                         )
                         ir.visuals.append(ir_visual)
 
@@ -553,70 +555,41 @@ class PipelineOrchestrator:
                             # Populate analytical rows so Tableau Desktop has data to aggregate and render
                             dims = ir_data.get("dimensions", [])
                             measures = ir_data.get("measures", [])
-                            articles_pool = [
-                                "AI in Clinical Healthcare Analytics",
-                                "Cloud Data Warehouse Optimization",
-                                "Enterprise BI Modernization Strategy",
-                                "Real-Time Streaming Pipelines at Scale",
-                                "Customer Lifetime Value Prediction",
-                                "Automated ETL Pipeline Architectures",
-                                "Data Governance & Lineage Guide",
-                                "Executive KPI Dashboard Best Practices",
-                            ]
                             with Inserter(connection, table_def) as inserter:
-                                for i in range(40):
-                                    art_idx = i % len(articles_pool)
+                                for i in range(50):
                                     row = []
                                     for d in dims:
-                                        name = d.get("name", d.get("local_name", "dim"))
-                                        if "Campaign" in name:
-                                            row.append(f"Campaign {chr(65 + (i % 5))}")
-                                        elif "Type" in name:
-                                            row.append(["Editorial", "Sponsored", "Tech Brief", "News", "Case Study"][i % 5])
-                                        elif "Date" in name:
+                                        name = (d.get("name", d.get("local_name", "dim")) or "").strip()
+                                        n_lower = name.lower()
+                                        if "status" in n_lower:
+                                            row.append(["Open", "Closed", "Pending", "In Review", "Approved", "Reopened"][i % 6])
+                                        elif "state" in n_lower or "geography" in n_lower:
+                                            row.append(["California", "Texas", "New York", "Florida", "Illinois", "Ohio", "Georgia", "North Carolina", "Pennsylvania", "Michigan"][i % 10])
+                                        elif "region" in n_lower:
+                                            row.append(["North", "South", "East", "West", "Central"][i % 5])
+                                        elif "cause" in n_lower:
+                                            row.append(["Collision", "Water Damage", "Theft", "Fire", "Hail", "Windstorm", "Vandalism"][i % 7])
+                                        elif "coverage" in n_lower or "policy" in n_lower or "lob" in n_lower or "business" in n_lower:
+                                            row.append(["Comprehensive", "Collision", "Liability", "Property", "Personal Auto", "Commercial"][i % 6])
+                                        elif any(k in n_lower for k in ["date", "time", "month", "year"]):
                                             row.append(f"2024-{(i % 12) + 1:02d}-{(i % 28) + 1:02d}")
-                                        elif "Published" in name:
-                                            row.append(["Global Times", "Tech Hub", "Analytics Digest", "Industry Review"][i % 4])
-                                        elif "URL" in name:
-                                            row.append(f"https://analytics.example.com/reports/art-{1000 + art_idx}")
-                                        elif "Article" in name:
-                                            row.append(articles_pool[art_idx])
+                                        elif "category" in n_lower or "band" in n_lower:
+                                            row.append(["Tier 1", "Tier 2", "Tier 3", "Tier 4"][i % 4])
+                                        elif any(k in n_lower for k in ["name", "adjuster", "customer", "agent", "user"]):
+                                            row.append(["Alex Morgan", "Jordan Lee", "Taylor Smith", "Morgan Reed", "Chris Evans", "Pat Taylor"][i % 6])
                                         else:
-                                            row.append(f"{name} {art_idx + 1}")
+                                            row.append(f"{name} {(i % 8) + 1}")
+
                                     for m in measures:
-                                        m_name = m.get("name", m.get("local_name", "measure"))
-                                        # Base weight inversely proportional to art_idx to simulate clean ranking
-                                        rank_weight = (len(articles_pool) - art_idx) * 120 + ((i * 17) % 80)
-                                        if "Unique Users" in m_name:
-                                            row.append(float(rank_weight * 2.5))
-                                        elif "Times Searched" in m_name:
-                                            if "Percent" in m_name:
-                                                row.append(round(0.12 + (art_idx * 0.035), 4))
-                                            else:
-                                                row.append(float(rank_weight * 0.8))
-                                        elif "Paid Clicks" in m_name:
-                                            if "Percent" in m_name:
-                                                row.append(round(0.18 + (art_idx * 0.025), 4))
-                                            else:
-                                                row.append(float(rank_weight * 1.2))
-                                        elif "Direct Visits" in m_name:
-                                            if "Percent" in m_name:
-                                                row.append(round(0.32 + (art_idx * 0.015), 4))
-                                            else:
-                                                row.append(float(rank_weight * 1.8))
-                                        elif "Social Media" in m_name:
-                                            if "Percent" in m_name:
-                                                row.append(round(0.22 + (art_idx * 0.020), 4))
-                                            else:
-                                                row.append(float(rank_weight * 0.9))
-                                        elif "Views" in m_name:
-                                            row.append(float(rank_weight * 4.5))
-                                        elif "Time" in m_name:
-                                            row.append(round(3.5 + (art_idx * 0.6), 2))
-                                        elif "Percent" in m_name or "Rate" in m_name or "Ratio" in m_name:
-                                            row.append(round(0.10 + (art_idx * 0.04), 4))
+                                        m_name = (m.get("name", m.get("local_name", "measure")) or "").strip().lower()
+                                        if any(k in m_name for k in ["percent", "rate", "ratio", "score"]):
+                                            row.append(round(0.05 + (((i * 7) % 90) / 100.0), 4))
+                                        elif any(k in m_name for k in ["days", "time", "count", "volume", "row"]):
+                                            row.append(float(((i * 3 + 7) % 45) + 1))
+                                        elif any(k in m_name for k in ["amount", "usd", "loss", "incurred", "paid", "reserve", "recovery", "salvage", "cost", "expense", "revenue", "sales", "price"]):
+                                            row.append(float(((i * 137 + 250) % 8500) + 150.0))
                                         else:
-                                            row.append(float(rank_weight))
+                                            row.append(float(((i * 31 + 47) % 1000) + 10.0))
                                     inserter.add_row(row)
                                 inserter.execute()
 
@@ -1012,13 +985,13 @@ class PipelineOrchestrator:
         # Get promoted content IDs from publish operations
         promote_ops = db.query(PublishOperation).filter(
             PublishOperation.job_id == job.id,
-            PublishOperation.operation_type == "promote_production",
+            PublishOperation.operation == "promote_production",
             PublishOperation.status == "success",
         ).all()
 
         promoted_ids = {
-            op.artifact_name: op.server_content_id
-            for op in promote_ops if op.server_content_id
+            op.artifact_id: op.remote_id
+            for op in promote_ops if op.remote_id
         }
 
         if not promoted_ids:

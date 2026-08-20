@@ -11,6 +11,14 @@ Responsibilities:
   3. Extract dimensionality (dimty) hints for LOD mapping
   4. Detect blocked/unsupported metric types
   5. Assign initial confidence scores
+
+Fix (ADR-032): Managed metrics (auto-created from file-based cube imports)
+  return HTTP 500 from /api/model/metrics/{id} with error code 8004d72a
+  "We do not support managed metric". These metrics have no Modeling Service
+  representation — their definition lives only in the cube's availableObjects.
+  Detection: subType == 'managed_metric' OR 'managed' flag in definition.
+  Fallback: derive tableau_calc from subtotalType (SUM/AVG/COUNT) captured
+  during discovery from GET /api/v2/cubes/{cubeId}.
 """
 
 import asyncio
@@ -71,6 +79,7 @@ class MeasureDef:
     confidence: float = 0.0
     blocked: bool = False
     block_reason: Optional[str] = None
+    precomputed_calc: Optional[str] = None  # Pre-derived Tableau calc (managed metrics, ADR-032)
 
 
 @dataclass
@@ -100,6 +109,32 @@ UNSUPPORTED_METRIC_SUBTYPES = {"training", "extreme", "relationship"}
 
 # Known MSTR aggregation function names
 SIMPLE_AGGREGATIONS = {"Sum", "Count", "Avg", "Min", "Max", "Median", "Stdev", "Var"}
+
+# MSTR subType values that indicate a managed metric
+# These metrics are auto-generated from file imports and have no Modeling Service representation.
+# Error code 8004d72a: "We do not support managed metric"
+MANAGED_METRIC_SUBTYPES = {
+    "managed_metric",
+    "managed",
+    "agg_metric",             # aggregation-only metric in a cube dataset
+    "cube_metric",            # cube-scoped metric (no project schema entry)
+}
+
+# Mapping from MSTR subtotalType → Tableau SUM/AVG/COUNT expression pattern
+SUBTOTAL_TO_TABLEAU: dict[str, str] = {
+    "SUM":    "SUM([{name}])",
+    "AVG":    "AVG([{name}])",
+    "COUNT":  "COUNT([{name}])",
+    "CNTD":   "COUNTD([{name}])",
+    "MIN":    "MIN([{name}])",
+    "MAX":    "MAX([{name}])",
+    "MEDIAN": "MEDIAN([{name}])",
+    "STDEV":  "STDEV([{name}])",
+    "VAR":    "VAR([{name}])",
+    "FIRST":  "MIN([{name}])",   # semi-additive FIRST → MIN proxy
+    "LAST":   "MAX([{name}])",   # semi-additive LAST  → MAX proxy
+    "NONE":   "[{name}]",
+}
 
 
 class SemanticAgent:
@@ -309,24 +344,158 @@ class SemanticAgent:
 
     # ── Metric extraction ───────────────────────────────────────
 
+    @staticmethod
+    def _is_managed_metric(detail: dict) -> bool:
+        """
+        Detect managed metrics that cannot be fetched via /api/model/metrics.
+
+        Managed metrics are auto-generated when a cube is created from a
+        file import (Excel/CSV/JSON). They return HTTP 500 with error code
+        8004d72a: "We do not support managed metric".
+
+        Detection strategy (any one is sufficient):
+          1. subType field contains a managed-metric marker string
+          2. 'managed' or 'isManaged' flag is truthy
+          3. Minimal stub dict: only {id, name, type:'metric'} — no expression,
+             no subType, no formula, no objectId, no dataType.
+             This is exactly what MSTR returns in cube availableObjects for
+             managed metrics — they have no Modeling Service representation.
+        """
+        if not isinstance(detail, dict):
+            return False
+
+        # Check 1: explicit subType marker
+        sub_type = str(detail.get("subType", detail.get("subtype", ""))).lower()
+        if any(m in sub_type for m in MANAGED_METRIC_SUBTYPES):
+            return True
+
+        # Check 2: explicit managed flag
+        if detail.get("managed") or detail.get("isManaged"):
+            return True
+
+        # Check 3: minimal stub — the exact format from cube availableObjects:
+        # {"id": "...", "name": "...", "type": "metric"} with NO other fields.
+        # Real schema metrics fetched via Model API have expression, subType,
+        # dataType, metricSubtotals, etc.
+        STUB_KEYS = {"id", "name", "type"}
+        MANAGED_INDICATOR_KEYS = {
+            "expression", "formula", "formulaText", "subType",
+            "dataType", "objectId", "metricSubtotals", "aggregateFromBase",
+            "information", "dimty", "conditionality",
+        }
+        dict_keys = set(detail.keys())
+        # Must have at least id and name to be a real metric stub
+        has_id_and_name = "id" in dict_keys and "name" in dict_keys
+        # If only stub keys present AND no schema-level keys → managed stub
+        if has_id_and_name and \
+           dict_keys <= (STUB_KEYS | {"subtype", "description", "hidden"}) and \
+           not (dict_keys & MANAGED_INDICATOR_KEYS):
+            # Final guard: type must be "metric" (not attribute/filter/etc.)
+            if str(detail.get("type", "")).lower() in ("metric", "4", ""):
+                return True
+
+        return False
+
+    def _build_managed_metric_def(self, obj: MigrationObject, detail: dict) -> MeasureDef:
+        """
+        Build a MeasureDef for a managed metric using only cube-level metadata.
+
+        Since /api/model/metrics/{id} is not supported for managed metrics,
+        we derive the Tableau calculation from the subtotalType captured
+        during discovery from GET /api/v2/cubes/{cubeId}/availableObjects.
+        """
+        # Prefer subtotalType from stored definition, default to SUM
+        raw_subtotal = (
+            detail.get("subtotalType")
+            or detail.get("aggregation")
+            or detail.get("defaultAggregationFunction")
+            or "SUM"
+        )
+        subtotal_type = str(raw_subtotal).upper().strip()
+
+        # Derive Tableau calculation from subtotal
+        calc_template = SUBTOTAL_TO_TABLEAU.get(subtotal_type, "SUM([{name}])")
+        loc_name = obj.name
+        tableau_calc = calc_template.format(name=loc_name)
+
+        # Confidence: managed metrics are structurally known, no expression tree risk
+        # Give 0.85 — we know the aggregation but not any filter/dimty complexity
+        confidence = 0.85
+
+        logger.info(
+            "Managed metric '%s' (%s): derived tableau_calc=%r from subtotalType=%r",
+            obj.name, obj.mstr_id, tableau_calc, subtotal_type,
+        )
+
+        return MeasureDef(
+            mstr_id=obj.mstr_id,
+            name=obj.name,
+            expression_ast=None,
+            expression_text=f"{subtotal_type}({obj.name})",   # human-readable
+            precomputed_calc=tableau_calc,                      # used by IRCompiler directly
+            dimty=None,
+            conditionality=None,
+            subtotal_type=subtotal_type,
+            format_spec=detail.get("format"),
+            thresholds=[],
+            dependencies=[],
+            confidence=confidence,
+            blocked=False,
+            block_reason=None,
+        )
+
     async def _extract_metric(self, obj: MigrationObject) -> MeasureDef:
         """
         Extract metric with expression tree, dimty, conditionality.
 
         Detects blocked types: training, extreme, relationship, derived elements,
         prompt-in-condition, and semi-additive facts.
+
+        For managed metrics (error 8004d72a from /api/model/metrics):
+        - Detected upfront via mstr_definition flags
+        - Skips Model API call entirely
+        - Derives tableau_calc from subtotalType in cube availableObjects
         """
+        cached_def = obj.mstr_definition or {}
+        if not isinstance(cached_def, dict):
+            cached_def = {}
+
+        # ── Fast path: managed metric detection ─────────────────
+        # Check the cached discovery definition BEFORE hitting the Model API.
+        # Managed metrics always 500 on /api/model/metrics/{id}.
+        if self._is_managed_metric(cached_def):
+            logger.info(
+                "Metric '%s' (%s) is a managed metric — skipping Model API, "
+                "using cube-level definition (avoids error 8004d72a)",
+                obj.name, obj.mstr_id,
+            )
+            return self._build_managed_metric_def(obj, cached_def)
+
+        # ── Standard path: fetch via Model API ──────────────────
         # Always fetch via dedicated Model API to get expression tree
         # (the cached mstr_definition from discovery often lacks expressions)
         detail = None
         try:
             detail = await self.mstr.get_metric(obj.mstr_id)
+        except MSTRAPIError as e:
+            # HTTP 500 with code 8004d72a = managed metric — fall back gracefully
+            if e.status_code == 500 and "8004d72a" in str(e):
+                logger.warning(
+                    "Metric '%s' (%s) rejected by Model API (8004d72a managed metric) — "
+                    "falling back to cube-level definition",
+                    obj.name, obj.mstr_id,
+                )
+                return self._build_managed_metric_def(obj, cached_def)
+            logger.warning("Could not fetch metric %s via Model API: %s", obj.mstr_id, e)
         except Exception as e:
             logger.warning("Could not fetch metric %s via Model API: %s", obj.mstr_id, e)
 
         # Fallback to cached definition
         if not detail or not isinstance(detail, dict):
-            detail = obj.mstr_definition or {}
+            # If the cached definition looks managed, treat it as such now
+            if self._is_managed_metric(cached_def):
+                return self._build_managed_metric_def(obj, cached_def)
+            detail = cached_def
         if not isinstance(detail, dict):
             detail = {}
 

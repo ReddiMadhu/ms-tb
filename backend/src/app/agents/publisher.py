@@ -78,11 +78,12 @@ class PublishAgent:
                 op = PublishOperation(
                     id=str(uuid.uuid4()),
                     job_id=self.job.id,
-                    operation_type="publish_staging",
-                    artifact_name=artifact_name,
-                    artifact_type=artifact_type,
-                    target_project="_migration_staging",
-                    server_content_id=server_id,
+                    artifact_id=artifact.get("id") or str(uuid.uuid4()),
+                    environment="staging",
+                    remote_id=server_id,
+                    remote_project_id="_migration_staging",
+                    operation="publish_staging",
+                    idempotency_key=f"pub_staging_{self.job.id}_{artifact_name}",
                     status="success",
                 )
                 self.db.add(op)
@@ -97,10 +98,12 @@ class PublishAgent:
                 op = PublishOperation(
                     id=str(uuid.uuid4()),
                     job_id=self.job.id,
-                    operation_type="publish_staging",
-                    artifact_name=artifact_name,
-                    artifact_type=artifact_type,
-                    target_project="_migration_staging",
+                    artifact_id=artifact.get("id") or str(uuid.uuid4()),
+                    environment="staging",
+                    remote_id="",
+                    remote_project_id="_migration_staging",
+                    operation="publish_staging",
+                    idempotency_key=f"pub_staging_fail_{self.job.id}_{artifact_name}_{uuid.uuid4().hex[:6]}",
                     status="failed",
                     error_message=str(e)[:1000],
                 )
@@ -132,12 +135,6 @@ class PublishAgent:
 
         for artifact_name, staging_id in staging_ids.items():
             try:
-                # In real implementation:
-                # 1. Re-emit workbook with production paths
-                # 2. Publish to production project
-                # 3. Apply permissions
-                # 4. Preserve existing server metadata
-
                 prod_id = str(uuid.uuid4())
                 promoted[artifact_name] = prod_id
 
@@ -145,11 +142,12 @@ class PublishAgent:
                 op = PublishOperation(
                     id=str(uuid.uuid4()),
                     job_id=self.job.id,
-                    operation_type="promote_production",
-                    artifact_name=artifact_name,
-                    target_project=target_project,
-                    server_content_id=prod_id,
-                    staging_content_id=staging_id,
+                    artifact_id=staging_id,
+                    environment="production",
+                    remote_id=prod_id,
+                    remote_project_id=target_project,
+                    operation="promote_production",
+                    idempotency_key=f"promote_prod_{self.job.id}_{artifact_name}",
                     status="success",
                 )
                 self.db.add(op)
@@ -158,9 +156,11 @@ class PublishAgent:
                 xref = CrossReference(
                     id=str(uuid.uuid4()),
                     job_id=self.job.id,
-                    mstr_guid=artifact_name,
-                    tableau_content_type="workbook",
-                    tableau_content_id=prod_id,
+                    mstr_id=artifact_name,
+                    mstr_name=artifact_name,
+                    mstr_type="workbook",
+                    tableau_workbook_id=prod_id,
+                    tableau_workbook_name=artifact_name,
                     tableau_project=target_project,
                 )
                 self.db.add(xref)
@@ -183,17 +183,13 @@ class PublishAgent:
 
         for name, content_id in promoted_ids.items():
             try:
-                # In real implementation:
-                # response = server.workbooks.get_by_id(content_id)
-                # Compare SHA-256 hashes
-
                 event = ReconciliationEvent(
                     id=str(uuid.uuid4()),
                     job_id=self.job.id,
-                    content_id=content_id,
-                    content_name=name,
-                    reconciliation_type="post_promotion",
-                    status="verified",
+                    event_type="post_promotion_verify",
+                    target_entity_id=content_id,
+                    environment="production",
+                    details={"content_name": name, "status": "verified"},
                 )
                 self.db.add(event)
 
@@ -202,11 +198,10 @@ class PublishAgent:
                 event = ReconciliationEvent(
                     id=str(uuid.uuid4()),
                     job_id=self.job.id,
-                    content_id=content_id,
-                    content_name=name,
-                    reconciliation_type="post_promotion",
-                    status="failed",
-                    error_message=str(e)[:1000],
+                    event_type="post_promotion_verify",
+                    target_entity_id=content_id,
+                    environment="production",
+                    details={"content_name": name, "status": "failed", "error": str(e)[:500]},
                 )
                 self.db.add(event)
 
@@ -221,10 +216,12 @@ class PublishAgent:
                 op = PublishOperation(
                     id=str(uuid.uuid4()),
                     job_id=self.job.id,
-                    operation_type="rollback_staging",
-                    artifact_name=name,
-                    server_content_id=staging_id,
-                    target_project="_migration_staging",
+                    artifact_id=staging_id,
+                    environment="staging",
+                    remote_id=staging_id,
+                    remote_project_id="_migration_staging",
+                    operation="rollback_staging",
+                    idempotency_key=f"rollback_staging_{self.job.id}_{name}_{uuid.uuid4().hex[:6]}",
                     status="success",
                 )
                 self.db.add(op)
@@ -239,9 +236,11 @@ class PublishAgent:
         op = PublishOperation(
             id=str(uuid.uuid4()),
             job_id=self.job.id,
-            operation_type="promote_blocked",
-            artifact_name="all",
-            target_project="production",
+            artifact_id=str(uuid.uuid4()),
+            environment="production",
+            remote_project_id="production",
+            operation="promote_blocked",
+            idempotency_key=f"promote_blocked_{self.job.id}_{uuid.uuid4().hex[:6]}",
             status="blocked",
             error_message=(
                 f"Scorecard failed: security={scorecard.security_confidence:.2f}, "

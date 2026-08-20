@@ -180,6 +180,11 @@ async def get_validation_scorecard(job_id: str, db: Session = Depends(get_db)):
 
     blocker_count = sum(1 for c in checks if not c.passed and c.check_type in ("row_count", "kpi_value", "xsd"))
     warning_count = sum(1 for c in checks if not c.passed and c.check_type not in ("row_count", "kpi_value", "xsd"))
+    mandatory_count = (
+        db.query(ReviewTask)
+        .filter(ReviewTask.job_id == job_id, ReviewTask.status == "pending")
+        .count()
+    )
 
     # Compute auto_publish_ok per ADR-025
     auto_publish_ok = (
@@ -189,6 +194,7 @@ async def get_validation_scorecard(job_id: str, db: Session = Depends(get_db)):
         and (job.visual_confidence or 0) >= 0.80
         and (job.security_parity is True)
         and blocker_count == 0
+        and mandatory_count == 0
     )
 
     return ValidationScorecardResponse(
@@ -197,10 +203,10 @@ async def get_validation_scorecard(job_id: str, db: Session = Depends(get_db)):
         financial_kpi_confidence=job.financial_kpi_confidence or 1.0,
         structural_confidence=job.structural_confidence or 1.0,
         visual_confidence=job.visual_confidence or 1.0,
-        security_parity=job.security_parity or True,
+        security_parity=job.security_parity if job.security_parity is not None else True,
         auto_publish_ok=auto_publish_ok,
         blocker_issues=blocker_count,
         warning_issues=warning_count,
-        mandatory_review_flags=0,  # TODO: compute from review_tasks
+        mandatory_review_flags=mandatory_count,
         checks=[ValidationCheckResponse.model_validate(c) for c in checks],
     )

@@ -340,6 +340,8 @@ class TableauEmitterAgent:
             register_field(ws_spec.size)
         if ws_spec.label:
             register_field(ws_spec.label)
+        for d in (getattr(ws_spec, "detail", []) or []):
+            register_field(d)
 
         # 1. view
         view = etree.SubElement(table, "view")
@@ -409,7 +411,7 @@ class TableauEmitterAgent:
             "class": mark_class,
         })
 
-        if ws_spec.color or ws_spec.size or ws_spec.label:
+        if ws_spec.color or ws_spec.size or ws_spec.label or getattr(ws_spec, "detail", None):
             encodings = etree.SubElement(pane, "encodings")
             if ws_spec.color:
                 col_key = f"[none:{ws_spec.color.name}:nk]" if ws_spec.color.field_type == "dimension" else f"[sum:{ws_spec.color.name}:qk]"
@@ -426,6 +428,14 @@ class TableauEmitterAgent:
                 etree.SubElement(encodings, "text", attrib={
                     "column": f"[federated.default].{col_key}",
                 })
+            if getattr(ws_spec, "detail", None):
+                for d in ws_spec.detail:
+                    if not d or not d.name:
+                        continue
+                    d_key = f"[none:{d.name}:nk]" if d.field_type == "dimension" else f"[sum:{d.name}:qk]"
+                    etree.SubElement(encodings, "lod", attrib={
+                        "column": f"[federated.default].{d_key}",
+                    })
 
         # 4. rows
         rows_el = etree.SubElement(table, "rows")
@@ -488,70 +498,72 @@ class TableauEmitterAgent:
             if ws.name in dash_spec.worksheets and not getattr(ws, "is_failed", False)
         ]
 
-        d_name_lower = dash_spec.name.lower()
+        if not valid_worksheets:
+            return
 
-        if "campaign overview" in d_name_lower:
-            # 3 zones: Top banner KPI (ARTICLES 18%), Bottom-Left (Top 5 LM 82%), Bottom-Right (Top 5 LM (2) 82%)
-            top_sheet = next((ws for ws in valid_worksheets if "article" in ws.name.lower() and "detail" not in ws.name.lower()), None)
-            left_sheet = next((ws for ws in valid_worksheets if ws != top_sheet and "(2)" not in ws.name), None)
-            right_sheet = next((ws for ws in valid_worksheets if ws != top_sheet and ws != left_sheet), None)
+        # Separate into KPIs and Charts for a balanced dashboard layout
+        kpi_sheets = [ws for ws in valid_worksheets if (ws.mark_type == "text" and not ws.rows and not ws.columns)]
+        chart_sheets = [ws for ws in valid_worksheets if ws not in kpi_sheets]
 
-            placed = 0
-            if top_sheet:
+        placed = 1  # root zone is id 1
+
+        if kpi_sheets and chart_sheets:
+            # Top row: KPI cards
+            kpi_h = 18000
+            kpi_w = 100000 // max(len(kpi_sheets), 1)
+            for i, kpi_ws in enumerate(kpi_sheets):
                 placed += 1
                 etree.SubElement(root_zone, "zone", attrib={
-                    "h": "18000", "id": str(placed + 1), "name": top_sheet.name, "w": "100000", "x": "0", "y": "0",
-                })
-            if left_sheet:
-                placed += 1
-                etree.SubElement(root_zone, "zone", attrib={
-                    "h": "82000", "id": str(placed + 1), "name": left_sheet.name, "w": "50000", "x": "0", "y": "18000",
-                })
-            if right_sheet:
-                placed += 1
-                etree.SubElement(root_zone, "zone", attrib={
-                    "h": "82000", "id": str(placed + 1), "name": right_sheet.name, "w": "50000", "x": "50000", "y": "18000",
+                    "h": str(kpi_h),
+                    "id": str(placed),
+                    "name": kpi_ws.name,
+                    "w": str(kpi_w),
+                    "x": str(i * kpi_w),
+                    "y": "0",
                 })
 
-        elif "article analysis" in d_name_lower:
-            # 4 KPI cards on top (18%), stacked bar in middle (42%), data grid at bottom (40%)
-            kpis = [ws for ws in valid_worksheets if any(k in ws.name.lower() for k in ["click", "search", "visit", "social"])]
-            middle = next((ws for ws in valid_worksheets if "source" in ws.name.lower()), None)
-            bottom = next((ws for ws in valid_worksheets if "detail" in ws.name.lower()), None)
+            # Body: Charts in a balanced 2-column or 3-column grid
+            body_y = kpi_h
+            body_h = 100000 - kpi_h
+            num_charts = len(chart_sheets)
+            cols = 2 if num_charts <= 4 else (3 if num_charts <= 9 else 4)
+            rows_cnt = max((num_charts + cols - 1) // cols, 1)
+            cell_w = 100000 // cols
+            cell_h = body_h // rows_cnt
 
-            placed = 0
-            # 4 KPI cards across top
-            kpi_w = 100000 // max(len(kpis), 1)
-            for i, kpi_ws in enumerate(kpis):
+            for i, c_ws in enumerate(chart_sheets):
                 placed += 1
+                col_idx = i % cols
+                row_idx = i // cols
                 etree.SubElement(root_zone, "zone", attrib={
-                    "h": "18000", "id": str(placed + 1), "name": kpi_ws.name, "w": str(kpi_w), "x": str(i * kpi_w), "y": "0",
-                })
-            # Middle stacked bar
-            if middle:
-                placed += 1
-                etree.SubElement(root_zone, "zone", attrib={
-                    "h": "42000", "id": str(placed + 1), "name": middle.name, "w": "100000", "x": "0", "y": "18000",
-                })
-            # Bottom detail grid
-            if bottom:
-                placed += 1
-                etree.SubElement(root_zone, "zone", attrib={
-                    "h": "40000", "id": str(placed + 1), "name": bottom.name, "w": "100000", "x": "0", "y": "60000",
+                    "h": str(cell_h),
+                    "id": str(placed),
+                    "name": c_ws.name,
+                    "w": str(cell_w),
+                    "x": str(col_idx * cell_w),
+                    "y": str(body_y + row_idx * cell_h),
                 })
 
         else:
-            # Default auto-tiling
-            for i, ws in enumerate(valid_worksheets):
-                zone_id = str(i + 2)
-                zone_h = 100000 // max(len(valid_worksheets), 1)
+            # All charts or all KPIs: Grid layout
+            sheets = valid_worksheets
+            num_sheets = len(sheets)
+            cols = 2 if num_sheets <= 4 else (3 if num_sheets <= 9 else 4)
+            rows_cnt = max((num_sheets + cols - 1) // cols, 1)
+            cell_w = 100000 // cols
+            cell_h = 100000 // rows_cnt
+
+            for i, ws in enumerate(sheets):
+                placed += 1
+                col_idx = i % cols
+                row_idx = i // cols
                 etree.SubElement(root_zone, "zone", attrib={
-                    "h": str(zone_h),
-                    "id": zone_id,
+                    "h": str(cell_h),
+                    "id": str(placed),
                     "name": ws.name,
-                    "w": "100000",
-                    "x": "0",
-                    "y": str(i * zone_h),
+                    "w": str(cell_w),
+                    "x": str(col_idx * cell_w),
+                    "y": str(row_idx * cell_h),
                 })
 
         # Dashboard filters
@@ -580,7 +592,7 @@ class TableauEmitterAgent:
             if dash_spec and getattr(dash_spec, "worksheets", None):
                 for ws_name in dash_spec.worksheets:
                     vp = etree.SubElement(viewpoints, "viewpoint", attrib={"name": ws_name})
-                    is_kpi = any(k in ws_name.lower() for k in ["paid click", "direct visit", "social media", "times search"]) or ws_name.upper() == "ARTICLES"
+                    is_kpi = any(k in ws_name.lower() for k in ["kpi", "card", "metric", "total", "avg", "count", "days", "rate", "paid", "reserve", "recovery", "loss", "claims", "amount"])
                     zoom_type = "entire-view" if is_kpi else "fit-width"
                     etree.SubElement(vp, "zoom", attrib={"type": zoom_type})
             active_el = etree.SubElement(window, "active")
@@ -593,7 +605,7 @@ class TableauEmitterAgent:
             etree.SubElement(strip_left, "card", attrib={"type": "filters"})
             etree.SubElement(strip_left, "card", attrib={"type": "marks"})
             vp = etree.SubElement(window, "viewpoint", attrib={"name": name})
-            is_kpi = any(k in name.lower() for k in ["paid click", "direct visit", "social media", "times search"]) or name.upper() == "ARTICLES"
+            is_kpi = any(k in name.lower() for k in ["kpi", "card", "metric", "total", "avg", "count", "days", "rate", "paid", "reserve", "recovery", "loss", "claims", "amount"])
             zoom_type = "entire-view" if is_kpi else "fit-width"
             etree.SubElement(vp, "zoom", attrib={"type": zoom_type})
 
