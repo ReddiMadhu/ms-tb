@@ -262,8 +262,10 @@ body {
 .app-main {
   margin-left: var(--sidebar-width);
   flex: 1;
+  min-width: 0;
   min-height: 100vh;
   background: var(--canvas);
+  overflow-x: hidden;
 }
 
 .app-header {
@@ -284,6 +286,8 @@ body {
   padding: 4px 20px 32px;
   max-width: 1440px;
   margin: 0 auto;
+  min-width: 0;
+  box-sizing: border-box;
 }
 
 /* ── Sidebar nav ───────────────────────────────────────────────── */
@@ -1751,6 +1755,26 @@ body {
   font-weight: 500;
   color: var(--ink-3);
   margin-top: 2px;
+}
+
+.pipeline-step-substage {
+  display: block;
+  margin-top: 3px;
+  font-size: 0.625rem;
+  font-weight: 600;
+  color: var(--blue);
+  text-align: center;
+  letter-spacing: 0.03em;
+  animation: substage-pulse 2s ease-in-out infinite;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 200px;
+}
+
+@keyframes substage-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
 }
 
 .pipeline-step-node.active .pipeline-step-label {

@@ -355,6 +355,23 @@ class PhysicalModelPlanner:
         }
         return type_map.get(mstr_type.lower(), "VARCHAR")
 
+    def _normalize_dialect(self, dialect: Optional[str]) -> str:
+        """Map user/warehouse dialect name to a valid sqlglot dialect."""
+        if not dialect:
+            return "postgres"
+        d = dialect.lower().strip()
+        dialect_map = {
+            "ansi": "postgres",
+            "standard": "postgres",
+            "default": "postgres",
+            "postgresql": "postgres",
+            "mssql": "tsql",
+            "sqlserver": "tsql",
+            "synapse": "tsql",
+            "google_bigquery": "bigquery",
+        }
+        return dialect_map.get(d, d)
+
     def _generate_select_sql(
         self,
         table_name: str,
@@ -373,7 +390,8 @@ class PhysicalModelPlanner:
 
         # Validate with sqlglot
         try:
-            sqlglot.transpile(sql, read=dialect, write="ansi")
+            read_d = self._normalize_dialect(dialect)
+            sqlglot.transpile(sql, read=read_d, write=read_d)
         except Exception as e:
             logger.warning("SQL validation warning for %s: %s", table_name, e)
 

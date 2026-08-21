@@ -249,6 +249,11 @@ class IRCompilerAgent:
             ir.relationships.append(ir_rel)
 
         # ── Step 3: Dimensions ──────────────────────────────────
+        # NOTE: We create only the primary display-form column per attribute.
+        # The MSTR Data API grid response returns one value per attribute
+        # (either DESC or ID form, depending on the cube definition).
+        # Creating hidden (ID) duplicate columns would inflate the schema
+        # beyond what the API provides, causing column misalignment.
 
         for dim in semantic_bundle.dimensions:
             local_name = self._make_local_name(dim.name)
@@ -264,21 +269,6 @@ class IRCompilerAgent:
                 data_type="string",
             )
             ir.dimensions.append(ir_dim)
-
-            # ID form → hidden dimension
-            if dim.id_form:
-                id_local = self._make_local_name(f"{dim.name} (ID)")
-                ir_dim_id = IRDimension(
-                    id=str(uuid.uuid4()),
-                    mstr_id=dim.mstr_id,
-                    name=f"{dim.name} (ID)",
-                    local_name=id_local,
-                    remote_name=self._normalize_identifier(f"{dim.name}_ID"),
-                    caption=f"{dim.name} (ID)",
-                    data_type="string",
-                    hidden=True,
-                )
-                ir.dimensions.append(ir_dim_id)
 
             # Register captions
             self._register_caption(

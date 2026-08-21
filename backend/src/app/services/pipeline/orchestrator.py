@@ -12,9 +12,14 @@ State machine transitions are persisted to SQLite for crash recovery.
 """
 
 import asyncio
+import dataclasses
+import json
 import logging
+import os
+import shutil
 import traceback
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
 from sqlalchemy.orm import Session
@@ -501,61 +506,219 @@ class PipelineOrchestrator:
     async def _run_hyper(self, db: Session, job: Job):
         """Stage 8: Hyper extract building — streaming chunked data extraction."""
         from app.agents.hyper_builder import HyperAgent
+        from app.models.objects import MigrationObject
+        from app.services.mstr_client.session import AsyncMSTRSession
         import json, os
 
         artifacts_dir = job.artifacts_dir or f"./artifacts/{job.id}"
         plan_path = os.path.join(artifacts_dir, "physical_plan.json")
-
-        if not os.path.exists(plan_path):
-            logger.warning("No physical plan found — building empty Hyper extract")
-
-        # Build a minimal Hyper file with schema from IR
         ir_path = os.path.join(artifacts_dir, "ir.json")
         hyper_dir = os.path.join(artifacts_dir, "hyper")
         os.makedirs(hyper_dir, exist_ok=True)
 
         hyper_paths = {}
+        hyper_file = os.path.join(hyper_dir, "extract.hyper")
 
-        if os.path.exists(ir_path):
-            with open(ir_path) as f:
-                ir_data = json.load(f)
+        if not os.path.exists(ir_path):
+            logger.warning("No IR found — skipping hyper build")
+            hyper_paths["default"] = hyper_file
+            paths_file = os.path.join(artifacts_dir, "hyper_paths.json")
+            with open(paths_file, "w") as f:
+                json.dump(hyper_paths, f, indent=2)
+            return
 
+        with open(ir_path) as f:
+            ir_data = json.load(f)
+
+        # 1. Check for Pre-Built Cache or Dynamic Source Files for this job's cubes
+        agent = HyperAgent(db=db, job=job, artifacts_dir=artifacts_dir)
+        cube_objs = db.query(MigrationObject).filter(
+            MigrationObject.job_id == job.id,
+            MigrationObject.type_name.in_(["cube", "report", "dataset"]),
+        ).all()
+
+        cached_extract_found = False
+        for cube in cube_objs:
+            cache_path = HyperAgent.get_cache_path(cube.mstr_id)
+            if cache_path.exists():
+                logger.info("Found cached Hyper extract for cube '%s' at %s. Using instant cache...", cube.name, cache_path)
+                try:
+                    shutil.copy(cache_path, hyper_file)
+                    cached_extract_found = True
+                    break
+                except Exception as c_err:
+                    logger.warning("Cache copy failed: %s", c_err)
+
+            # Check for any source files matching cube name in artifacts or job dir
+            source_candidates = [
+                Path(os.path.join(artifacts_dir, f"{cube.name}.parquet")),
+                Path(os.path.join(artifacts_dir, f"{cube.name}.csv")),
+                Path(os.path.join(artifacts_dir, f"{cube.name}.xlsx")),
+                Path(f"./artifacts/{cube.name}.parquet"),
+                Path(f"./artifacts/{cube.name}.csv"),
+            ]
+            for sc in source_candidates:
+                if sc.exists():
+                    logger.info("Found direct source file at %s. Ingesting via DuckDB + PyArrow...", sc)
+                    try:
+                        agent.build_from_source_file(sc, Path(hyper_file))
+                        shutil.copy(hyper_file, cache_path)
+                        cached_extract_found = True
+                        break
+                    except Exception as s_err:
+                        logger.warning("Direct source ingest failed: %s", s_err)
+            if cached_extract_found:
+                break
+
+        if cached_extract_found:
+            hyper_paths["default"] = hyper_file
+            paths_file = os.path.join(artifacts_dir, "hyper_paths.json")
+            with open(paths_file, "w") as f:
+                json.dump(hyper_paths, f, indent=2)
+            return
+
+        # 2. Attempt live MSTR Cube instance data extraction via Parallel Async Stream
+        live_extracted_rows = []
+        if self.mstr_username and self.mstr_password and job.mstr_base_url and job.mstr_project_id:
             try:
-                from tableauhyperapi import HyperProcess, Telemetry, Connection, CreateMode, TableDefinition, TableName, SqlType, Inserter
+                logger.info("Attempting live MSTR cube data streaming...")
+                async with AsyncMSTRSession(
+                    base_url=job.mstr_base_url,
+                    username=self.mstr_username,
+                    password=self.mstr_password,
+                    project_id=job.mstr_project_id,
+                ) as mstr_session:
+                    for cube in cube_objs:
+                        try:
+                            logger.info("Creating live cube instance for '%s' (%s)...", cube.name, cube.mstr_id)
+                            instance = await mstr_session.create_cube_instance(cube.mstr_id)
+                            instance_id = instance.get("instanceId")
+                            if instance_id:
+                                # Fetch Page 1 (offset=0) to inspect total rows
+                                first_page = await mstr_session.get_cube_data(
+                                    cube.mstr_id,
+                                    instance_id,
+                                    offset=0,
+                                    limit=10000,
+                                )
+                                first_rows = agent._parse_mstr_response(first_page)
+                                live_extracted_rows.extend(first_rows)
 
-                hyper_file = os.path.join(hyper_dir, "extract.hyper")
+                                result_meta = first_page.get("result", first_page)
+                                data_meta = result_meta.get("data", {}) if isinstance(result_meta, dict) else {}
+                                total_rows = data_meta.get("paging", {}).get("total", len(first_rows))
+                                logger.info("MSTR cube '%s': %d total rows detected (Page 1: %d rows)", cube.name, total_rows, len(first_rows))
 
-                with HyperProcess(telemetry=Telemetry.DO_NOT_SEND_USAGE_DATA_TO_TABLEAU) as hyper:
-                    with Connection(
-                        endpoint=hyper.endpoint,
-                        database=hyper_file,
-                        create_mode=CreateMode.CREATE_AND_REPLACE,
-                    ) as connection:
-                        # Build table from IR dimensions + measures
-                        columns = []
-                        for dim in ir_data.get("dimensions", []):
-                            columns.append(TableDefinition.Column(
-                                dim.get("local_name", dim.get("name", "dim")),
-                                SqlType.text(),
-                            ))
-                        for measure in ir_data.get("measures", []):
-                            columns.append(TableDefinition.Column(
-                                measure.get("local_name", measure.get("name", "measure")),
-                                SqlType.double(),
-                            ))
+                                # If more rows remain, stream all remaining pages in parallel
+                                if total_rows > 10000:
+                                    logger.info("Launching parallel worker pool (max_concurrency=8) for remaining %d rows...", total_rows - 10000)
+                                    remaining_pages = await mstr_session.get_cube_data_parallel(
+                                        cube.mstr_id,
+                                        instance_id,
+                                        total_rows=total_rows,
+                                        batch_size=10000,
+                                        max_concurrency=8,
+                                    )
+                                    # Process pages from offset 10000 onwards (skip first page)
+                                    for page in remaining_pages[1:]:
+                                        page_rows = agent._parse_mstr_response(page)
+                                        live_extracted_rows.extend(page_rows)
 
-                        if columns:
-                            table_def = TableDefinition(
-                                TableName("Extract", "Extract"),
-                                columns,
-                            )
-                            connection.catalog.create_schema_if_not_exists("Extract")
-                            connection.catalog.create_table_if_not_exists(table_def)
+                                logger.info("Successfully harvested %d live rows from MSTR cube '%s'", len(live_extracted_rows), cube.name)
+                        except Exception as ce:
+                            logger.warning("Live cube streaming for %s encountered error: %s", cube.name, ce)
+            except Exception as e:
+                logger.warning("Could not establish live MSTR session for row streaming: %s", e)
 
-                            # Populate analytical rows so Tableau Desktop has data to aggregate and render
-                            dims = ir_data.get("dimensions", [])
-                            measures = ir_data.get("measures", [])
-                            with Inserter(connection, table_def) as inserter:
+        try:
+            from tableauhyperapi import HyperProcess, Telemetry, Connection, CreateMode, TableDefinition, TableName, SqlType, Inserter
+
+            with HyperProcess(telemetry=Telemetry.DO_NOT_SEND_USAGE_DATA_TO_TABLEAU) as hyper:
+                with Connection(
+                    endpoint=hyper.endpoint,
+                    database=hyper_file,
+                    create_mode=CreateMode.CREATE_AND_REPLACE,
+                ) as connection:
+                    # Build table definition from IR dimensions + measures with guaranteed unique column names
+                    columns = []
+                    seen_col_names = set()
+                    for dim in ir_data.get("dimensions", []):
+                        col_name = dim.get("local_name", dim.get("name", "dim"))
+                        base_name = col_name
+                        idx = 1
+                        while col_name in seen_col_names:
+                            col_name = f"{base_name} ({idx})"
+                            idx += 1
+                        seen_col_names.add(col_name)
+                        columns.append(TableDefinition.Column(col_name, SqlType.text()))
+
+                    for measure in ir_data.get("measures", []):
+                        col_name = measure.get("local_name", measure.get("name", "measure"))
+                        base_name = col_name
+                        idx = 1
+                        while col_name in seen_col_names:
+                            col_name = f"{base_name} ({idx})"
+                            idx += 1
+                        seen_col_names.add(col_name)
+                        columns.append(TableDefinition.Column(col_name, SqlType.double()))
+
+                    if columns:
+                        table_def = TableDefinition(
+                            TableName("Extract", "Extract"),
+                            columns,
+                        )
+                        connection.catalog.create_schema_if_not_exists("Extract")
+                        connection.catalog.create_table_if_not_exists(table_def)
+
+                        dims = ir_data.get("dimensions", [])
+                        measures = ir_data.get("measures", [])
+                        total_col_count = len(columns)
+
+                        with Inserter(connection, table_def) as inserter:
+                            if live_extracted_rows:
+                                # Stream all live extracted rows with name-based column mapping.
+                                # _parse_mstr_response now returns list[dict] keyed by field name.
+                                logger.info("Inserting %d live MSTR rows into Hyper extract...", len(live_extracted_rows))
+
+                                def _get_field_val(row_dict, *candidate_keys):
+                                    for k in candidate_keys:
+                                        if k and k in row_dict:
+                                            return row_dict[k]
+                                    # Case-insensitive fallback
+                                    norm_dict = {str(k).strip().lower(): v for k, v in row_dict.items()}
+                                    for k in candidate_keys:
+                                        if k:
+                                            norm_k = str(k).strip().lower()
+                                            if norm_k in norm_dict:
+                                                return norm_dict[norm_k]
+                                    return None
+
+                                for r in live_extracted_rows:
+                                    clean_row = []
+
+                                    # 1. Populate dimension columns by name lookup
+                                    for d in dims:
+                                        val = _get_field_val(r, d.get("name"), d.get("local_name"), d.get("caption"), d.get("remote_name"))
+                                        clean_row.append(str(val) if val is not None and str(val).lower() != "none" else None)
+
+                                    # 2. Populate measure columns by name lookup with numeric coercion
+                                    for m in measures:
+                                        val = _get_field_val(r, m.get("name"), m.get("local_name"), m.get("caption"), m.get("remote_name"))
+                                        if val is None or str(val).strip().lower() in ("", "none", "null", "nan", "-"):
+                                            clean_row.append(None)
+                                        else:
+                                            try:
+                                                clean_str = str(val).replace("$", "").replace(",", "").replace("%", "").strip()
+                                                clean_row.append(float(clean_str))
+                                            except Exception:
+                                                clean_row.append(None)
+
+                                    inserter.add_row(clean_row)
+                                inserter.execute()
+                                logger.info("Successfully populated Hyper extract with %d LIVE MSTR rows", len(live_extracted_rows))
+                            else:
+                                # Populate representative validation rows if offline
+                                logger.info("No live session rows — inserting 50 verification rows into Hyper extract")
                                 for i in range(50):
                                     row = []
                                     for d in dims:
@@ -593,14 +756,12 @@ class PipelineOrchestrator:
                                     inserter.add_row(row)
                                 inserter.execute()
 
-                hyper_paths["default"] = hyper_file
-                logger.info("Hyper extract built and populated: %s (%d columns, 50 rows)", hyper_file, len(columns))
+            hyper_paths["default"] = hyper_file
+            row_count = len(live_extracted_rows) if live_extracted_rows else 50
+            logger.info("Hyper extract built: %s (%d columns, %d rows)", hyper_file, len(columns), row_count)
 
-            except Exception as e:
-                logger.warning("Hyper build failed (non-fatal): %s", e)
-                # Create an empty placeholder path
-                hyper_paths["default"] = os.path.join(hyper_dir, "extract.hyper")
-        else:
+        except Exception as e:
+            logger.warning("Hyper build failed (non-fatal): %s", e)
             hyper_paths["default"] = os.path.join(hyper_dir, "extract.hyper")
 
         # Persist hyper_paths

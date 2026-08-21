@@ -279,7 +279,7 @@ export default function DashboardInventory() {
   const [expandedSpecId, setExpandedSpecId] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
-  useEffect(() => {
+  const loadDashboardData = React.useCallback(async () => {
     if (!jobId) return;
 
     // Fetch dossier name from objects
@@ -292,92 +292,101 @@ export default function DashboardInventory() {
       .catch(() => {});
 
     // Fetch real worksheet cards from viz-plan
-    api.getVizPlan(jobId)
-      .then((vizPlan) => {
-        const ws = vizPlan.worksheets || [];
-        if (ws.length === 0) return;
+    try {
+      const vizPlan = await api.getVizPlan(jobId);
+      const ws = vizPlan.worksheets || [];
+      if (ws.length === 0) return;
 
-        const markToChart: Record<string, string> = {
-          bar: 'Bar Chart',
-          line: 'Line Chart',
-          text: 'Text / KPI Card',
-          area: 'Area Chart',
-          circle: 'Scatter Plot',
-          square: 'Heat Map',
-          pie: 'Pie Chart',
-          gantt_bar: 'Gantt Chart',
-          polygon: 'Map',
+      const markToChart: Record<string, string> = {
+        bar: 'Bar Chart',
+        line: 'Line Chart',
+        text: 'Text / KPI Card',
+        area: 'Area Chart',
+        circle: 'Scatter Plot',
+        square: 'Heat Map',
+        pie: 'Pie Chart',
+        gantt_bar: 'Gantt Chart',
+        polygon: 'Map',
+      };
+
+      const dynamicCards: ConversionCardItem[] = ws.map((w) => {
+        const chartType = markToChart[w.mark_type] || w.mark_type;
+        const rowNames = (w.rows || []).map((r: any) => `[${r.name}]`);
+        const colNames = (w.columns || []).map((c: any) => `[${c.name}]`);
+        const colorField = w.color ? `[${w.color.name}]` : null;
+        const labelField = w.label ? `[${w.label.name}]` : null;
+        const measNames = [...(w.rows || []), ...(w.columns || [])]
+          .filter((f: any) => f.field_type === 'measure')
+          .map((f: any) => f.name);
+        if (w.label) measNames.push(w.label.name);
+        const attrNames = [...(w.rows || []), ...(w.columns || [])]
+          .filter((f: any) => f.field_type === 'dimension')
+          .map((f: any) => f.name);
+        if (w.color?.field_type === 'dimension') attrNames.push(w.color.name);
+
+        const filterStrs = (w.filters || []).map((f: any) => `[${f.field_name}]`);
+
+        const mstrType = chartType.includes('Bar') ? 'Vertical Bar (Standard Clustered)' :
+          chartType.includes('Line') ? 'Line Chart (Time Series Trend)' :
+          chartType.includes('KPI') ? 'KPI Card (Single Metric)' :
+          chartType.includes('Grid') || chartType.includes('Text') ? 'Cross-Tab Grid' :
+          `MicroStrategy ${chartType} (Native Visual)`;
+
+        return {
+          id: w.id,
+          worksheetName: w.name,
+          chartType,
+          status: (w.is_failed ? 'MANUAL_REVIEW' : 'SUCCESS') as 'SUCCESS' | 'MANUAL_REVIEW',
+          mstr: {
+            type: mstrType,
+            columns: colNames.length > 0 ? colNames : (labelField ? [labelField] : ['—']),
+            rows: rowNames.length > 0 ? rowNames : ['—'],
+            color: colorField || '—',
+            tooltip: [...colNames, ...rowNames].slice(0, 3),
+            filters: filterStrs,
+            metrics: [...new Set(measNames)],
+            attributes: [...new Set(attrNames)],
+          },
+          tableau: {
+            markType: w.mark_type.charAt(0).toUpperCase() + w.mark_type.slice(1),
+            columnsShelf: colNames.length > 0 ? colNames : (labelField ? [labelField] : ['—']),
+            rowsShelf: rowNames.length > 0 ? rowNames : ['—'],
+            colorEncoding: colorField || '—',
+            labelEncoding: labelField || '—',
+            tooltipShelf: [...colNames, ...rowNames].slice(0, 3),
+            filtersShelf: filterStrs,
+            worksheetXmlSpec: `<worksheet name="${w.name}">\n  <table>\n    <rows>${rowNames.join('')}</rows>\n    <cols>${colNames.join('')}</cols>\n  </table>\n</worksheet>`,
+          },
+          validation: {
+            visualTypePreserved: true,
+            fieldsCorrectlyMapped: !w.is_failed,
+            filtersPreserved: true,
+            aggregationsPreserved: true,
+            formattingPreserved: true,
+            sortOrderPreserved: true,
+            tooltipPreserved: true,
+            calculationsPreserved: true,
+          },
         };
-
-        const dynamicCards: ConversionCardItem[] = ws.map((w) => {
-          const chartType = markToChart[w.mark_type] || w.mark_type;
-          const rowNames = (w.rows || []).map((r: any) => `[${r.name}]`);
-          const colNames = (w.columns || []).map((c: any) => `[${c.name}]`);
-          const colorField = w.color ? `[${w.color.name}]` : null;
-          const labelField = w.label ? `[${w.label.name}]` : null;
-          const measNames = [...(w.rows || []), ...(w.columns || [])]
-            .filter((f: any) => f.field_type === 'measure')
-            .map((f: any) => f.name);
-          if (w.label) measNames.push(w.label.name);
-          const attrNames = [...(w.rows || []), ...(w.columns || [])]
-            .filter((f: any) => f.field_type === 'dimension')
-            .map((f: any) => f.name);
-          if (w.color?.field_type === 'dimension') attrNames.push(w.color.name);
-
-          const filterStrs = (w.filters || []).map((f: any) => `[${f.field_name}]`);
-
-          const mstrType = chartType.includes('Bar') ? 'Vertical Bar (Standard Clustered)' :
-            chartType.includes('Line') ? 'Line Chart (Time Series Trend)' :
-            chartType.includes('KPI') ? 'KPI Card (Single Metric)' :
-            chartType.includes('Grid') || chartType.includes('Text') ? 'Cross-Tab Grid' :
-            `MicroStrategy ${chartType} (Native Visual)`;
-
-          return {
-            id: w.id,
-            worksheetName: w.name,
-            chartType,
-            status: (w.is_failed ? 'MANUAL_REVIEW' : 'SUCCESS') as 'SUCCESS' | 'MANUAL_REVIEW',
-            mstr: {
-              type: mstrType,
-              columns: colNames.length > 0 ? colNames : (labelField ? [labelField] : ['—']),
-              rows: rowNames.length > 0 ? rowNames : ['—'],
-              color: colorField || '—',
-              tooltip: [...colNames, ...rowNames].slice(0, 3),
-              filters: filterStrs,
-              metrics: [...new Set(measNames)],
-              attributes: [...new Set(attrNames)],
-            },
-            tableau: {
-              markType: w.mark_type.charAt(0).toUpperCase() + w.mark_type.slice(1),
-              columnsShelf: colNames.length > 0 ? colNames : (labelField ? [labelField] : ['—']),
-              rowsShelf: rowNames.length > 0 ? rowNames : ['—'],
-              colorEncoding: colorField || '—',
-              labelEncoding: labelField || '—',
-              tooltipShelf: [...colNames, ...rowNames].slice(0, 3),
-              filtersShelf: filterStrs,
-              worksheetXmlSpec: `<worksheet name="${w.name}">\n  <table>\n    <rows>${rowNames.join('')}</rows>\n    <cols>${colNames.join('')}</cols>\n  </table>\n</worksheet>`,
-            },
-            validation: {
-              visualTypePreserved: true,
-              fieldsCorrectlyMapped: !w.is_failed,
-              filtersPreserved: true,
-              aggregationsPreserved: true,
-              formattingPreserved: true,
-              sortOrderPreserved: true,
-              tooltipPreserved: true,
-              calculationsPreserved: true,
-            },
-          };
-        });
-
-        if (dynamicCards.length > 0) {
-          setVisuals(dynamicCards);
-        }
-      })
-      .catch(() => {
-        // keep default cards on error
       });
+
+      if (dynamicCards.length > 0) {
+        setVisuals(dynamicCards);
+      }
+    } catch {
+      // Keep existing
+    }
   }, [jobId]);
+
+  useEffect(() => {
+    loadDashboardData();
+
+    const interval = setInterval(() => {
+      loadDashboardData();
+    }, 3000);
+
+    return () => clearInterval(interval);
+  }, [loadDashboardData]);
 
   const filteredVisuals = useMemo(() => {
     return visuals.filter((v) => {

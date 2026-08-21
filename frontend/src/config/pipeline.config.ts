@@ -1,6 +1,7 @@
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // Pipeline Configuration — Single source of truth
 // Edit this file to add/rename/reorder stages.
+// Aligned with backend orchestrator.py PIPELINE_STAGES (20 stages)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 export interface PipelineStageConfig {
@@ -91,13 +92,22 @@ export const PIPELINE_STAGES: PipelineStageConfig[] = [
     number: 9,
     title: 'Datasource Generation',
     shortTitle: 'Datasource',
-    description: 'Generate Tableau datasource definitions',
+    description: 'Generate Tableau datasource definitions (.tds)',
     icon: 'FileOutput',
     color: 'var(--green)',
   },
   {
-    id: 'WORKBOOK_EMIT_STAGING',
+    id: 'DATASOURCE_PUBLISH',
     number: 10,
+    title: 'Datasource Publish',
+    shortTitle: 'DS Publish',
+    description: 'Publish generated datasources to Tableau staging environment',
+    icon: 'Upload',
+    color: 'var(--green)',
+  },
+  {
+    id: 'WORKBOOK_EMIT_STAGING',
+    number: 11,
     title: 'Workbook Generation',
     shortTitle: 'Workbook',
     description: 'Generate Tableau workbooks with dashboards and worksheets',
@@ -105,17 +115,80 @@ export const PIPELINE_STAGES: PipelineStageConfig[] = [
     color: 'var(--green)',
   },
   {
+    id: 'STAGING_PUBLISH',
+    number: 12,
+    title: 'Staging Publish',
+    shortTitle: 'Stage Pub',
+    description: 'Publish workbook to Tableau staging server for validation',
+    icon: 'CloudUpload',
+    color: 'var(--green)',
+  },
+  {
+    id: 'SERVER_RENDER_VALIDATE',
+    number: 13,
+    title: 'Server Render Validation',
+    shortTitle: 'Render Check',
+    description: 'Validate server-side rendering of published workbooks on Tableau',
+    icon: 'MonitorCheck',
+    color: 'var(--yellow)',
+  },
+  {
     id: 'STATIC_VALIDATE',
-    number: 11,
-    title: 'Validation',
+    number: 14,
+    title: 'Structural Validation',
     shortTitle: 'Validate',
-    description: 'Validate all artifacts — structural, numeric, security, visual checks',
+    description: 'Validate all artifacts — structural checks and schema compliance',
     icon: 'ShieldCheck',
     color: 'var(--yellow)',
   },
   {
+    id: 'SECURITY_VALIDATE',
+    number: 15,
+    title: 'Security Validation',
+    shortTitle: 'Security',
+    description: 'Validate security parity — RLS filters, permission mapping, access controls',
+    icon: 'Lock',
+    color: 'var(--yellow)',
+  },
+  {
+    id: 'NUMERIC_VALIDATE',
+    number: 16,
+    title: 'Numeric Validation',
+    shortTitle: 'Numeric',
+    description: 'Validate numeric parity — KPI values, aggregation accuracy, decimal precision',
+    icon: 'Calculator',
+    color: 'var(--yellow)',
+  },
+  {
+    id: 'WORKBOOK_EMIT_PRODUCTION',
+    number: 17,
+    title: 'Production Workbook Emit',
+    shortTitle: 'Prod Emit',
+    description: 'Generate production-ready workbook with validated configurations',
+    icon: 'PackageCheck',
+    color: 'var(--green)',
+  },
+  {
+    id: 'PROMOTE',
+    number: 18,
+    title: 'Production Promotion',
+    shortTitle: 'Promote',
+    description: 'Promote validated workbooks from staging to production environment',
+    icon: 'ArrowUpCircle',
+    color: 'var(--green)',
+  },
+  {
+    id: 'RECONCILE',
+    number: 19,
+    title: 'Reconciliation',
+    shortTitle: 'Reconcile',
+    description: 'Post-promotion reconciliation — verify published assets and cleanup staging',
+    icon: 'CheckCheck',
+    color: 'var(--green)',
+  },
+  {
     id: 'REPORT',
-    number: 12,
+    number: 20,
     title: 'Report Generation',
     shortTitle: 'Report',
     description: 'Generate migration report and final package',
@@ -135,7 +208,7 @@ export function getStageIndex(stageId: string): number {
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// Phase Grouping — 4 lifecycle phases that aggregate the 12 stages
+// Phase Grouping — 4 lifecycle phases that aggregate the 20 stages
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 export interface PhaseConfig {
@@ -178,10 +251,10 @@ export const PIPELINE_PHASES: PhaseConfig[] = [
     id: 'TARGET_BUILD',
     number: 3,
     title: 'Visual Conversion Report',
-    description: 'Side-by-side MicroStrategy to Tableau visual conversion report & worksheet specs',
+    description: 'Side-by-side MicroStrategy to Tableau visual conversion, artifact generation & staging publish',
     icon: 'FileSpreadsheet',
     color: 'var(--green)',
-    stageIds: ['VIZ', 'HYPER_BUILD', 'DATASOURCE_EMIT', 'WORKBOOK_EMIT_STAGING'],
+    stageIds: ['VIZ', 'HYPER_BUILD', 'DATASOURCE_EMIT', 'DATASOURCE_PUBLISH', 'WORKBOOK_EMIT_STAGING', 'STAGING_PUBLISH'],
     subViews: [
       { label: 'Visual Conversion Report', key: 'dashboards' },
     ],
@@ -190,10 +263,10 @@ export const PIPELINE_PHASES: PhaseConfig[] = [
     id: 'QUALITY_PACKAGE',
     number: 4,
     title: 'Publish & Export Center',
-    description: 'Export packaged Tableau workbooks (.twbx), datasources (.tds / .hyper), and deployment artifacts',
+    description: 'Multi-gate validation, production promotion, reconciliation & export',
     icon: 'ShieldCheck',
     color: 'var(--yellow)',
-    stageIds: ['STATIC_VALIDATE', 'REPORT'],
+    stageIds: ['SERVER_RENDER_VALIDATE', 'STATIC_VALIDATE', 'SECURITY_VALIDATE', 'NUMERIC_VALIDATE', 'WORKBOOK_EMIT_PRODUCTION', 'PROMOTE', 'RECONCILE', 'REPORT'],
     subViews: [
       { label: 'Export Center', key: 'exports' },
     ],
@@ -228,3 +301,45 @@ export function getPhaseStatus(
   if (statuses.some(s => s === 'COMPLETED')) return 'RUNNING'; // partially complete
   return 'WAITING';
 }
+
+/**
+ * Get the currently active sub-stage label for a phase.
+ * Returns the stage config of the currently running stage within the phase, if any.
+ */
+export function getActiveSubStage(
+  phaseId: string,
+  stageStatuses: Record<string, string>,
+): PipelineStageConfig | null {
+  const phase = getPhaseConfig(phaseId);
+  if (!phase) return null;
+
+  for (const stageId of phase.stageIds) {
+    if (stageStatuses[stageId] === 'RUNNING') {
+      return getStageConfig(stageId) || null;
+    }
+  }
+  return null;
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Job Lifecycle & Status Helpers
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+export const TERMINAL_JOB_STATUSES = [
+  'COMPLETE',
+  'COMPLETE_WITH_WARNINGS',
+  'PUBLISHED',
+  'FAILED',
+  'CANCELLED',
+];
+
+export function isJobTerminal(status?: string): boolean {
+  if (!status) return false;
+  return TERMINAL_JOB_STATUSES.includes(status);
+}
+
+export function isJobRunning(status?: string): boolean {
+  if (!status) return false;
+  return !isJobTerminal(status);
+}
+

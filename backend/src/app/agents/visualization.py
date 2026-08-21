@@ -121,10 +121,12 @@ class VisualizationAgent:
 
     def __init__(self, ir):
         self.ir = ir
+        self._used_kpi_measures = set()
 
     def plan(self) -> VizPlan:
         """Generate VizPlan from IR visuals."""
         result = VizPlan()
+        self._used_kpi_measures.clear()
         # Clean and deduplicate worksheet names
         seen_names: dict[str, int] = {}
         for visual in self.ir.visuals:
@@ -232,11 +234,36 @@ class VisualizationAgent:
             other_dims = [d for d in dims if d != matched_dim and d != date_dim]
             secondary_dim = other_dims[0] if other_dims else None
 
-            if tableau_mark == "text" or raw_type in ("kpi", "metric_value", "gauge"):
-                # KPI Card: Measure value on Text label
+            if raw_type in ("kpi", "metric_value", "card", "gauge"):
+                # KPI Card: Single Measure value on Text label
                 if matched_measure:
                     label = FieldRef(name=matched_measure.caption or matched_measure.name, field_type="measure")
                 tableau_mark = "text"
+
+            elif raw_type in ("grid", "crosstab", "table"):
+                # Tabular Grid: Dimension on Rows, Measure on Columns & Text Label
+                dim_to_use = matched_dim or (dims[0] if dims else None)
+                meas_to_use = matched_measure or (measures[0] if measures else None)
+                if dim_to_use:
+                    rows.append(FieldRef(name=dim_to_use.caption or dim_to_use.name, field_type="dimension"))
+                if meas_to_use:
+                    columns.append(FieldRef(name=meas_to_use.caption or meas_to_use.name, field_type="measure"))
+                    label = FieldRef(name=meas_to_use.caption or meas_to_use.name, field_type="measure")
+                tableau_mark = "text"
+
+            elif raw_type in ("combo", "combo_chart", "dual_axis"):
+                # Dual-Axis Combo Chart: Dimension on Rows, Primary Measure + Secondary Measure on Columns
+                dim_to_use = matched_dim or (dims[0] if dims else None)
+                meas_to_use = matched_measure or (measures[0] if measures else None)
+                remaining_measures = [m for m in measures if m != meas_to_use]
+                second_meas = self._match_secondary_measure_for_visual(vis_clean, remaining_measures, meas_to_use)
+                if dim_to_use:
+                    rows.append(FieldRef(name=dim_to_use.caption or dim_to_use.name, field_type="dimension"))
+                if meas_to_use:
+                    columns.append(FieldRef(name=meas_to_use.caption or meas_to_use.name, field_type="measure"))
+                if second_meas:
+                    columns.append(FieldRef(name=second_meas.caption or second_meas.name, field_type="measure"))
+                tableau_mark = "bar"
 
             elif tableau_mark == "bar":
                 # Bar Chart: Dimension on Rows, Measure on Columns
@@ -328,8 +355,7 @@ class VisualizationAgent:
             filters=filters,
         )
 
-    @staticmethod
-    def _match_measure_for_visual(vis_clean: str, measures: list) -> Optional[Any]:
+    def _match_measure_for_visual(self, vis_clean: str, measures: list) -> Optional[Any]:
         """Find the measure that best matches keywords in the visual title."""
         if not measures:
             return None
@@ -338,6 +364,7 @@ class VisualizationAgent:
             m_name = (getattr(m, "name", "") or "").lower()
             m_cap = (getattr(m, "caption", "") or "").lower()
             if (m_name and m_name == vis_clean) or (m_cap and m_cap == vis_clean):
+                self._used_kpi_measures.add(getattr(m, "mstr_id", getattr(m, "name", "")))
                 return m
 
         # Priority 2: Keyword overlap with visual title
@@ -373,7 +400,18 @@ class VisualizationAgent:
                 best_score = score
                 best_measure = m
 
-        return best_measure if best_measure else measures[0]
+        if best_measure and best_score > 0:
+            self._used_kpi_measures.add(getattr(best_measure, "mstr_id", getattr(best_measure, "name", "")))
+            return best_measure
+
+        # Priority 3: For generic titles ("Visualization 2 copy", etc.), pick the first unused measure
+        for m in measures:
+            m_key = getattr(m, "mstr_id", getattr(m, "name", ""))
+            if m_key not in self._used_kpi_measures:
+                self._used_kpi_measures.add(m_key)
+                return m
+
+        return measures[0]
 
     @staticmethod
     def _match_dimension_for_visual(vis_clean: str, dims: list) -> Optional[Any]:
@@ -413,3 +451,35 @@ class VisualizationAgent:
                 best_dim = d
 
         return best_dim if best_dim else (dims[0] if dims else None)
+
+    @staticmethod
+    def _match_secondary_measure_for_visual(vis_clean: str, remaining_measures: list, primary_measure: Any) -> Optional[Any]:
+        """Find the secondary measure that best complements the primary measure for combo charts."""
+        if not remaining_measures:
+            return None
+
+        # Priority 1: Check keywords in title specifically for second measure concepts
+        vis_words = set(re.findall(r"\w+", vis_clean))
+        for m in remaining_measures:
+            m_name = (getattr(m, "name", "") or "").lower()
+            m_cap = (getattr(m, "caption", "") or "").lower()
+            m_words = set(re.findall(r"\w+", f"{m_name} {m_cap}"))
+
+            if ("resolution" in vis_words or "days" in vis_words) and ("resolution" in m_words or "days" in m_words):
+                return m
+            if ("incurred" in vis_words or "loss" in vis_words or "amount" in vis_words) and ("incurred" in m_words or "paid" in m_words):
+                return m
+            if ("claims" in vis_words or "volume" in vis_words or "count" in vis_words) and ("count" in m_words or "row" in m_words):
+                return m
+            if ("fraud" in vis_words or "score" in vis_words) and "fraud" in m_words:
+                return m
+
+        # Priority 2: If primary is volume/count, choose monetary measure (Incurred / Paid)
+        p_name = (getattr(primary_measure, "name", "") or "").lower() if primary_measure else ""
+        if "count" in p_name or "row" in p_name:
+            incurred = next((m for m in remaining_measures if "incurred" in (getattr(m, "name", "") or "").lower()), None)
+            if incurred:
+                return incurred
+
+        # Priority 3: First available remaining measure
+        return remaining_measures[0]

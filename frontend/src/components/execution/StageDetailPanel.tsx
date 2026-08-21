@@ -73,11 +73,19 @@ export const StageDetailPanel: React.FC<StageDetailPanelProps> = ({
         return { label: 'Inspect Calculation Logic Conversion', to: `/jobs/${jobId}/logic` };
       case 'VIZ':
       case 'WORKBOOK_EMIT_STAGING':
+      case 'DATASOURCE_PUBLISH':
+      case 'STAGING_PUBLISH':
         return { label: 'View Visual Conversion Report', to: `/jobs/${jobId}/dashboards` };
       case 'STATIC_VALIDATE':
+      case 'SERVER_RENDER_VALIDATE':
+      case 'SECURITY_VALIDATE':
+      case 'NUMERIC_VALIDATE':
       case 'REPORT':
       case 'DATASOURCE_EMIT':
       case 'HYPER_BUILD':
+      case 'WORKBOOK_EMIT_PRODUCTION':
+      case 'PROMOTE':
+      case 'RECONCILE':
         return { label: 'View Publish & Export Center', to: `/jobs/${jobId}/exports` };
       default:
         return null;

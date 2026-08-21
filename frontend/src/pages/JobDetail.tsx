@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { AlertTriangle } from 'lucide-react';
 import { api, type Job, type ArtifactItem } from '../api';
@@ -9,6 +9,8 @@ import {
   PIPELINE_PHASES,
   getStageIndex,
   getPhaseForStage,
+  isJobTerminal,
+  isJobRunning,
 } from '../config/pipeline.config';
 
 export default function JobDetailPage() {
@@ -19,6 +21,7 @@ export default function JobDetailPage() {
   const [loading, setLoading] = useState(true);
   const [resuming, setResuming] = useState(false);
   const [cancelling, setCancelling] = useState(false);
+  const userSelectedPhaseRef = useRef<boolean>(false);
 
   const loadData = useCallback(async () => {
     if (!jobId) return;
@@ -26,9 +29,9 @@ export default function JobDetailPage() {
       const jobData = await api.getJob(jobId);
       setJob(jobData);
 
-      // Auto-follow current stage → map to its phase
+      // Auto-follow current stage → map to its phase if user hasn't manually clicked another phase
       const currentStage = jobData.progress?.current_stage || jobData.current_stage;
-      if (currentStage) {
+      if (currentStage && !userSelectedPhaseRef.current) {
         const phase = getPhaseForStage(currentStage);
         if (phase) setSelectedPhaseId(phase.id);
       }
@@ -42,13 +45,15 @@ export default function JobDetailPage() {
   useEffect(() => {
     loadData();
 
-    if (job && !['RUNNING', 'PENDING', 'PROMOTING'].includes(job.status)) {
+    // Poll continuously while job is in-progress (not terminal)
+    const terminal = job && isJobTerminal(job.status);
+    if (terminal) {
       return;
     }
 
     const interval = setInterval(() => {
       loadData();
-    }, 4000);
+    }, 2000);
 
     return () => clearInterval(interval);
   }, [loadData, job?.status]);
@@ -78,11 +83,11 @@ export default function JobDetailPage() {
     );
   }
 
-  const isRunning = ['RUNNING', 'PENDING', 'PROMOTING'].includes(job.status);
+  const isRunning = isJobRunning(job.status);
   const isComplete = ['COMPLETE', 'COMPLETE_WITH_WARNINGS', 'PUBLISHED'].includes(job.status);
   const isFailed = job.status === 'FAILED';
 
-  // Compute per-stage status map
+  // Compute per-stage status map across all 20 stages
   const currentStageKey = job.progress?.current_stage || job.current_stage || 'DISCOVERY';
   const currentIdx = getStageIndex(currentStageKey);
 
@@ -167,7 +172,10 @@ export default function JobDetailPage() {
       {/* ── 4-Node Pipeline Stepper ──────────────────────────────── */}
       <PipelineStepper
         selectedPhaseId={selectedPhaseId}
-        onSelectPhase={setSelectedPhaseId}
+        onSelectPhase={(phaseId) => {
+          userSelectedPhaseRef.current = true;
+          setSelectedPhaseId(phaseId);
+        }}
         stageStatuses={stageStatuses}
       />
 

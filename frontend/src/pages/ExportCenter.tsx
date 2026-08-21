@@ -29,33 +29,50 @@ export default function ExportCenter() {
   <!-- Schema Mappings from MicroStrategy Data Model -->
 </datasource>`);
 
-  useEffect(() => {
+  const loadExportData = React.useCallback(async () => {
     if (!jobId) return;
-    api.listArtifacts(jobId)
-      .then((res) => {
-        const raw = res.artifacts || [];
-        const hasProdWb = raw.some((a) => a.environment === 'production' || (a.file_name || '').includes('_prod'));
-        const filtered = hasProdWb
-          ? raw.filter((a) => !(a.environment === 'staging' && (a.file_name || '').endsWith('.twbx')))
-          : raw;
-        setArtifacts(filtered);
+    try {
+      const res = await api.listArtifacts(jobId);
+      const raw = res.artifacts || [];
+      const hasProdWb = raw.some((a) => a.environment === 'production' || (a.file_name || '').includes('_prod'));
+      const filtered = hasProdWb
+        ? raw.filter((a) => !(a.environment === 'staging' && (a.file_name || '').endsWith('.twbx')))
+        : raw;
+      setArtifacts(filtered);
 
-        // Fetch real TDS XML if available
-        const tdsArt = raw.find((a) => (a.file_name || '').endsWith('.tds') || a.type === 'datasource');
-        if (tdsArt) {
-          fetch(`/api/v1/jobs/${jobId}/download/${tdsArt.id}`)
-            .then((r) => (r.ok ? r.text() : ''))
-            .then((text) => {
-              if (text && text.includes('<datasource')) {
-                setTdsXml(text);
-              }
-            })
-            .catch(() => {});
-        }
-      })
-      .catch(() => setArtifacts([]));
-    api.getJob(jobId).then((j) => setJob(j)).catch(() => setJob(null));
+      // Fetch real TDS XML if available
+      const tdsArt = raw.find((a) => (a.file_name || '').endsWith('.tds') || a.type === 'datasource');
+      if (tdsArt) {
+        fetch(`/api/v1/jobs/${jobId}/download/${tdsArt.id}`)
+          .then((r) => (r.ok ? r.text() : ''))
+          .then((text) => {
+            if (text && text.includes('<datasource')) {
+              setTdsXml(text);
+            }
+          })
+          .catch(() => {});
+      }
+    } catch {
+      // Keep existing artifacts on error
+    }
+
+    try {
+      const j = await api.getJob(jobId);
+      setJob(j);
+    } catch {
+      // Keep existing job
+    }
   }, [jobId]);
+
+  useEffect(() => {
+    loadExportData();
+
+    const interval = setInterval(() => {
+      loadExportData();
+    }, 3000);
+
+    return () => clearInterval(interval);
+  }, [loadExportData]);
 
   const targetProject = job?.tableau_target_project || 'Migrated Dashboards';
   const targetVersion = job?.template_version || '2024.2';

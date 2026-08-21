@@ -351,6 +351,18 @@ class TableauEmitterAgent:
             "name": "federated.default",
         })
 
+        def _get_meas_pill_info(meas_name, f_obj=None):
+            agg = getattr(f_obj, "aggregation", None)
+            if not agg:
+                lower = str(meas_name).lower()
+                if any(k in lower for k in ["avg", "average", "rate", "score", "days", "time", "ratio", "percent"]):
+                    agg = "Avg"
+                else:
+                    agg = "Sum"
+            deriv = agg.capitalize() if isinstance(agg, str) else "Sum"
+            prefix = "avg" if deriv == "Avg" else "sum"
+            return deriv, f"[federated.default].[{prefix}:{meas_name}:qk]", f"[{prefix}:{meas_name}:qk]"
+
         # Inject datasource-dependencies so Tableau resolves shelf pills
         if used_dims or used_meas:
             ds_deps = etree.SubElement(view, "datasource-dependencies", attrib={
@@ -370,7 +382,8 @@ class TableauEmitterAgent:
                     "pivot": "key",
                     "type": "nominal",
                 })
-            for meas_name in used_meas:
+            for meas_name, f_obj in used_meas.items():
+                deriv, _, pill_name = _get_meas_pill_info(meas_name, f_obj)
                 etree.SubElement(ds_deps, "column", attrib={
                     "datatype": "real",
                     "name": f"[{meas_name}]",
@@ -379,8 +392,8 @@ class TableauEmitterAgent:
                 })
                 etree.SubElement(ds_deps, "column-instance", attrib={
                     "column": f"[{meas_name}]",
-                    "derivation": "Sum",
-                    "name": f"[sum:{meas_name}:qk]",
+                    "derivation": deriv,
+                    "name": pill_name,
                     "pivot": "key",
                     "type": "quantitative",
                 })
@@ -400,50 +413,72 @@ class TableauEmitterAgent:
 
         # 3. panes
         panes = etree.SubElement(table, "panes")
+        meas_cols = [c for c in ws_spec.columns if getattr(c, "field_type", "") == "measure"]
+        is_combo_dual = len(meas_cols) >= 2
+
+        # Primary Pane (id="0")
         pane = etree.SubElement(panes, "pane", attrib={"id": "0"})
         pane_view = etree.SubElement(pane, "view")
         etree.SubElement(pane_view, "breakdown", attrib={"value": "auto"})
 
-        # Mark class
+        # Primary Mark class
         raw_mark = ws_spec.mark_type or "automatic"
         mark_class = MARK_CLASS_MAP.get(raw_mark.lower(), "Automatic")
-        etree.SubElement(pane, "mark", attrib={
-            "class": mark_class,
-        })
+        etree.SubElement(pane, "mark", attrib={"class": mark_class})
 
         if ws_spec.color or ws_spec.size or ws_spec.label or getattr(ws_spec, "detail", None):
             encodings = etree.SubElement(pane, "encodings")
             if ws_spec.color:
-                col_key = f"[none:{ws_spec.color.name}:nk]" if ws_spec.color.field_type == "dimension" else f"[sum:{ws_spec.color.name}:qk]"
+                if ws_spec.color.field_type == "dimension":
+                    col_key = f"[federated.default].[none:{ws_spec.color.name}:nk]"
+                else:
+                    _, col_key, _ = _get_meas_pill_info(ws_spec.color.name, ws_spec.color)
                 etree.SubElement(encodings, "color", attrib={
-                    "column": f"[federated.default].{col_key}",
+                    "column": col_key,
                 })
             if ws_spec.size:
-                col_key = f"[sum:{ws_spec.size.name}:qk]"
+                _, col_key, _ = _get_meas_pill_info(ws_spec.size.name, ws_spec.size)
                 etree.SubElement(encodings, "size", attrib={
-                    "column": f"[federated.default].{col_key}",
+                    "column": col_key,
                 })
             if ws_spec.label:
-                col_key = f"[sum:{ws_spec.label.name}:qk]" if ws_spec.label.field_type == "measure" else f"[none:{ws_spec.label.name}:nk]"
+                if ws_spec.label.field_type == "measure":
+                    _, col_key, _ = _get_meas_pill_info(ws_spec.label.name, ws_spec.label)
+                else:
+                    col_key = f"[federated.default].[none:{ws_spec.label.name}:nk]"
                 etree.SubElement(encodings, "text", attrib={
-                    "column": f"[federated.default].{col_key}",
+                    "column": col_key,
                 })
             if getattr(ws_spec, "detail", None):
                 for d in ws_spec.detail:
                     if not d or not d.name:
                         continue
-                    d_key = f"[none:{d.name}:nk]" if d.field_type == "dimension" else f"[sum:{d.name}:qk]"
+                    if d.field_type == "dimension":
+                        d_key = f"[federated.default].[none:{d.name}:nk]"
+                    else:
+                        _, d_key, _ = _get_meas_pill_info(d.name, d)
                     etree.SubElement(encodings, "lod", attrib={
-                        "column": f"[federated.default].{d_key}",
+                        "column": d_key,
                     })
+
+        # Secondary Pane (id="1") for Dual-Axis Combo Charts
+        if is_combo_dual:
+            pane2 = etree.SubElement(panes, "pane", attrib={"id": "1"})
+            pane2_view = etree.SubElement(pane2, "view")
+            etree.SubElement(pane2_view, "breakdown", attrib={"value": "auto"})
+            # Secondary mark is Line for trend over Bars
+            etree.SubElement(pane2, "mark", attrib={"class": "Line"})
 
         # 4. rows
         rows_el = etree.SubElement(table, "rows")
         if ws_spec.rows:
             row_pills = []
             for r in ws_spec.rows:
-                pill = f"[none:{r.name}:nk]" if r.field_type == "dimension" else f"[sum:{r.name}:qk]"
-                row_pills.append(f"[federated.default].{pill}")
+                if r.field_type == "dimension":
+                    row_pills.append(f"[federated.default].[none:{r.name}:nk]")
+                else:
+                    _, pill_full, _ = _get_meas_pill_info(r.name, r)
+                    row_pills.append(pill_full)
             rows_el.text = " ".join(row_pills)
 
         # 5. cols
@@ -451,9 +486,12 @@ class TableauEmitterAgent:
         if ws_spec.columns:
             col_pills = []
             for c in ws_spec.columns:
-                pill = f"[none:{c.name}:nk]" if c.field_type == "dimension" else f"[sum:{c.name}:qk]"
-                col_pills.append(f"[federated.default].{pill}")
-            cols_el.text = " ".join(col_pills)
+                if c.field_type == "dimension":
+                    col_pills.append(f"[federated.default].[none:{c.name}:nk]")
+                else:
+                    _, pill_full, _ = _get_meas_pill_info(c.name, c)
+                    col_pills.append(pill_full)
+            cols_el.text = " + ".join(col_pills) if is_combo_dual else " ".join(col_pills)
 
     def _emit_dashboard(self, parent, dash_spec, all_worksheets):
         """Emit a schema-valid <dashboard> element with all required XSD children and worksheet zones."""
@@ -643,9 +681,22 @@ class TableauEmitterAgent:
             zf.write(str(twb_path), twb_path.name)
 
             # Add Hyper extracts
+            written = False
             for domain, hyper_path in hyper_paths.items():
-                if os.path.exists(hyper_path):
-                    zf.write(hyper_path, f"Data/Extracts/{domain}.hyper")
+                real_path = None
+                if os.path.exists(str(hyper_path)):
+                    real_path = str(hyper_path)
+                elif (self.artifacts_dir / "hyper" / "extract.hyper").exists():
+                    real_path = str(self.artifacts_dir / "hyper" / "extract.hyper")
+                elif (self.artifacts_dir / "hyper" / f"{domain}.hyper").exists():
+                    real_path = str(self.artifacts_dir / "hyper" / f"{domain}.hyper")
+
+                if real_path and os.path.exists(real_path):
+                    zf.write(real_path, f"Data/Extracts/{domain}.hyper")
+                    written = True
+
+            if not written and (self.artifacts_dir / "hyper" / "extract.hyper").exists():
+                zf.write(str(self.artifacts_dir / "hyper" / "extract.hyper"), "Data/Extracts/default.hyper")
 
         return twbx_path
 

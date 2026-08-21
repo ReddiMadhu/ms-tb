@@ -1,3 +1,4 @@
+
 import React, { useEffect, useState, useMemo } from 'react';
 import { useParams } from 'react-router-dom';
 import {
@@ -124,60 +125,69 @@ export default function LogicExplorer() {
   const [copiedIndex, setCopiedIndex] = useState<string | null>(null);
   const [copiedScript, setCopiedScript] = useState(false);
 
-  useEffect(() => {
+  const loadCalculations = React.useCallback(async () => {
     if (!jobId) return;
-    api.listObjects(jobId)
-      .then((res) => {
-        const objects = res.objects || [];
-        const dynamicCalcs = objects
-          .filter((o) => o.type_name === 'metric' || o.expression_text || o.tableau_calc)
-          .map((o: MigrationObject, idx: number) => {
-            const name = o.name;
-            const srcExp = o.expression_text || `Sum([${name}])`;
-            const tgtCalc = o.tableau_calc || `SUM([${name}])`;
-            const isLod = tgtCalc.includes('FIXED') || tgtCalc.includes('NULLIF') || name.toLowerCase().includes('ratio') || name.toLowerCase().includes('percent');
-            const isTableCalc = tgtCalc.includes('LOOKUP') || tgtCalc.includes('RUNNING_') || tgtCalc.includes('WINDOW_');
-            const isConditional = tgtCalc.includes('IF ') || tgtCalc.includes('CASE ');
+    try {
+      const res = await api.listObjects(jobId);
+      const objects = res.objects || [];
+      const dynamicCalcs = objects
+        .filter((o) => o.type_name === 'metric' || o.expression_text || o.tableau_calc)
+        .map((o: MigrationObject, idx: number) => {
+          const name = o.name;
+          const srcExp = o.expression_text || `Sum([${name}])`;
+          const tgtCalc = o.tableau_calc || `SUM([${name}])`;
+          const isLod = tgtCalc.includes('FIXED') || tgtCalc.includes('NULLIF') || name.toLowerCase().includes('ratio') || name.toLowerCase().includes('percent');
+          const isTableCalc = tgtCalc.includes('LOOKUP') || tgtCalc.includes('RUNNING_') || tgtCalc.includes('WINDOW_');
+          const isConditional = tgtCalc.includes('IF ') || tgtCalc.includes('CASE ');
 
-            const category: 'LOD' | 'CONDITIONAL' | 'TABLE_CALC' | 'STANDARD' = isLod
-              ? 'LOD'
-              : isTableCalc
-              ? 'TABLE_CALC'
-              : isConditional
-              ? 'CONDITIONAL'
-              : 'STANDARD';
+          const category: 'LOD' | 'CONDITIONAL' | 'TABLE_CALC' | 'STANDARD' = isLod
+            ? 'LOD'
+            : isTableCalc
+            ? 'TABLE_CALC'
+            : isConditional
+            ? 'CONDITIONAL'
+            : 'STANDARD';
 
-            const formulaType = isLod
-              ? 'LOD / Ratio Expression'
-              : isTableCalc
-              ? 'Table Calculation'
-              : isConditional
-              ? 'Conditional Logic'
-              : 'Standard Measure';
+          const formulaType = isLod
+            ? 'LOD / Ratio Expression'
+            : isTableCalc
+            ? 'Table Calculation'
+            : isConditional
+            ? 'Conditional Logic'
+            : 'Standard Measure';
 
-            return {
-              id: o.id || o.mstr_id || `calc-dyn-${idx}`,
-              name,
-              category,
-              formulaType,
-              sourceFormula: srcExp,
-              targetCalc: tgtCalc,
-              method: o.translation_method || 'AST Expression Engine',
-              confidence: o.confidence || 0.98,
-              validationStatus: (o.status === 'compiled' || o.status === 'published' ? 'VALID' : 'VALID') as 'VALID' | 'WARNING' | 'FAIL',
-              datasource: (o as any).datasource || 'MicroStrategy Schema',
-              explanation: `Compiled from MicroStrategy expression using ${o.translation_method || 'AST engine'} with full Tableau calculation compatibility.`,
-            };
-          });
+          return {
+            id: o.id || o.mstr_id || `calc-dyn-${idx}`,
+            name,
+            category,
+            formulaType,
+            sourceFormula: srcExp,
+            targetCalc: tgtCalc,
+            method: o.translation_method || 'AST Expression Engine',
+            confidence: o.confidence || 0.98,
+            validationStatus: (o.status === 'compiled' || o.status === 'published' ? 'VALID' : 'VALID') as 'VALID' | 'WARNING' | 'FAIL',
+            datasource: (o as any).datasource || 'MicroStrategy Schema',
+            explanation: `Compiled from MicroStrategy expression using ${o.translation_method || 'AST engine'} with full Tableau calculation compatibility.`,
+          };
+        });
 
-        if (dynamicCalcs.length > 0) {
-          setCalculations(dynamicCalcs);
-        }
-      })
-      .catch(() => {
-        // keep DEFAULT_CALCULATIONS on error
-      });
+      if (dynamicCalcs.length > 0) {
+        setCalculations(dynamicCalcs);
+      }
+    } catch {
+      // Keep existing calculations on error
+    }
   }, [jobId]);
+
+  useEffect(() => {
+    loadCalculations();
+
+    const interval = setInterval(() => {
+      loadCalculations();
+    }, 3000);
+
+    return () => clearInterval(interval);
+  }, [loadCalculations]);
 
   const filteredConversions = useMemo(() => {
     return calculations.filter((item) => {

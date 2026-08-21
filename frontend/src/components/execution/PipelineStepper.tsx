@@ -13,6 +13,7 @@ import {
   PIPELINE_PHASES,
   type PhaseConfig,
   getPhaseStatus,
+  getActiveSubStage,
 } from '../../config/pipeline.config';
 
 interface PipelineStepperProps {
@@ -41,6 +42,7 @@ export const PipelineStepper: React.FC<PipelineStepperProps> = ({
           const isSelected = selectedPhaseId === phase.id;
           const isLast = idx === PIPELINE_PHASES.length - 1;
           const IconComponent = PHASE_ICON_MAP[phase.icon] || Search;
+          const activeSubStage = getActiveSubStage(phase.id, stageStatuses);
 
           return (
             <React.Fragment key={phase.id}>
@@ -66,6 +68,12 @@ export const PipelineStepper: React.FC<PipelineStepperProps> = ({
                   )}
                 </div>
                 <span className="pipeline-step-label">{phase.title}</span>
+                {/* Active sub-stage indicator */}
+                {status === 'RUNNING' && activeSubStage && (
+                  <span className="pipeline-step-substage">
+                    {activeSubStage.shortTitle}
+                  </span>
+                )}
               </button>
 
               {!isLast && (
