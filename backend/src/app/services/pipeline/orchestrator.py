@@ -341,6 +341,48 @@ class PipelineOrchestrator:
             MigrationObject.type_name == "dossier",
         ).all()
 
+        # Harvest visual metadata map directly from MSTR API instance endpoints
+        viz_meta_map = {}
+        try:
+            from app.services.mstr_client.session import MSTRSession
+            sync_session = MSTRSession(
+                base_url=job.mstr_base_url or settings.mstr_base_url,
+                username=self.mstr_username or settings.mstr_username,
+                password=self.mstr_password or settings.mstr_password,
+                project_id=job.mstr_project_id or settings.mstr_project_id,
+            )
+            sync_session.login()
+            for dossier_obj in dossier_objs:
+                dossier_id = dossier_obj.mstr_id
+                try:
+                    d_inst = sync_session.create_dossier_instance(dossier_id)
+                    d_iid = d_inst.get("mid") or d_inst.get("instanceId")
+                    defn = dossier_obj.mstr_definition or {}
+                    for chapter in defn.get("chapters", []):
+                        ch_key = chapter.get("key")
+                        for page in chapter.get("pages", []):
+                            for viz in page.get("visualizations", []):
+                                vz_key = viz.get("key", viz.get("id", ""))
+                                try:
+                                    v_detail = sync_session.get_visualization_definition(dossier_id, d_iid, ch_key, vz_key)
+                                    res = v_detail.get("result", {}).get("definition", {})
+                                    v_metrics = [m.get("name") for m in res.get("metrics", [])]
+                                    v_attrs = [a.get("name") for a in res.get("attributes", [])]
+                                    num_format = res.get("metrics", [{}])[0].get("numberFormatting", {}) if res.get("metrics") else {}
+                                    viz_meta_map[vz_key] = {
+                                        "metrics": v_metrics,
+                                        "attributes": v_attrs,
+                                        "number_formatting": num_format,
+                                    }
+                                except Exception:
+                                    pass
+                except Exception as de:
+                    logger.warning("Could not create dossier instance for visual metadata: %s", de)
+            sync_session.close()
+            logger.info("Harvested ground-truth metadata for %d visuals from MSTR", len(viz_meta_map))
+        except Exception as e:
+            logger.warning("Could not harvest visual metadata from MSTR: %s", e)
+
         for dossier_obj in dossier_objs:
             defn = dossier_obj.mstr_definition
             if not isinstance(defn, dict):
@@ -386,6 +428,20 @@ class PipelineOrchestrator:
                                                 elif shelf == "size":
                                                     size_field = elem_name
 
+                        v_meta = viz_meta_map.get(viz_key, {})
+                        v_metrics = v_meta.get("metrics", [])
+                        v_attrs = v_meta.get("attributes", [])
+                        v_format = v_meta.get("number_formatting", {})
+
+                        # If viz_name is a generic internal container name from MicroStrategy copy-paste,
+                        # resolve it to the bound metric or attribute name if available:
+                        v_name_lower = (viz_name or "").lower().strip()
+                        if "visualization" in v_name_lower or v_name_lower.startswith("viz"):
+                            if v_metrics and v_metrics[0]:
+                                viz_name = v_metrics[0].strip()
+                            elif v_attrs and v_attrs[0]:
+                                viz_name = v_attrs[0].strip()
+
                         ir_visual = IRVisual(
                             id=str(uuid_mod.uuid4()),
                             name=viz_name,
@@ -396,6 +452,10 @@ class PipelineOrchestrator:
                             size=size_field,
                             chapter_name=chapter.get("name"),
                             page_name=page.get("name"),
+                            viz_key=viz_key,
+                            mstr_metrics=v_metrics,
+                            mstr_attributes=v_attrs,
+                            number_formatting=v_format,
                         )
                         ir.visuals.append(ir_visual)
 

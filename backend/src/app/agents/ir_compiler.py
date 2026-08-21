@@ -114,6 +114,10 @@ class IRVisual:
     filters: list[str] = field(default_factory=list)
     chapter_name: Optional[str] = None
     page_name: Optional[str] = None
+    viz_key: Optional[str] = None
+    mstr_metrics: list[str] = field(default_factory=list)
+    mstr_attributes: list[str] = field(default_factory=list)
+    number_formatting: dict = field(default_factory=dict)
 
 
 @dataclass

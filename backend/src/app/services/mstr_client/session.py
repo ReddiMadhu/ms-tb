@@ -311,6 +311,24 @@ class MSTRSession:
         resp = self.get(f"/api/v2/dossiers/{dossier_id}/definition")
         return resp.json()
 
+    def create_dossier_instance(self, dossier_id: str) -> dict:
+        """POST /api/dossiers/{id}/instances — create dossier instance."""
+        resp = self.post(f"/api/dossiers/{dossier_id}/instances", json={})
+        return resp.json()
+
+    def get_visualization_definition(
+        self,
+        dossier_id: str,
+        instance_id: str,
+        chapter_key: str,
+        visualization_key: str,
+    ) -> dict:
+        """GET /api/dossiers/{id}/instances/{iid}/chapters/{ch}/visualizations/{vk} — get specific visual definition."""
+        resp = self.get(
+            f"/api/dossiers/{dossier_id}/instances/{instance_id}/chapters/{chapter_key}/visualizations/{visualization_key}"
+        )
+        return resp.json()
+
     def get_attribute(self, attribute_id: str) -> dict:
         """GET /api/model/attributes/{id} — attribute with all forms."""
         resp = self.get(f"/api/model/attributes/{attribute_id}")
@@ -486,6 +504,24 @@ class AsyncMSTRSession:
 
     async def get_dossier_definition(self, dossier_id: str) -> dict:
         return await asyncio.to_thread(self._session.get_dossier_definition, dossier_id)
+
+    async def create_dossier_instance(self, dossier_id: str) -> dict:
+        return await asyncio.to_thread(self._session.create_dossier_instance, dossier_id)
+
+    async def get_visualization_definition(
+        self,
+        dossier_id: str,
+        instance_id: str,
+        chapter_key: str,
+        visualization_key: str,
+    ) -> dict:
+        return await asyncio.to_thread(
+            self._session.get_visualization_definition,
+            dossier_id,
+            instance_id,
+            chapter_key,
+            visualization_key,
+        )
 
     async def get_attribute(self, attribute_id: str) -> dict:
         return await asyncio.to_thread(self._session.get_attribute, attribute_id)

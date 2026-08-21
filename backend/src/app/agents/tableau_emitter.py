@@ -111,10 +111,19 @@ class TableauEmitterAgent:
         datasources_node = etree.SubElement(root, "datasources")
         ds_node = self._emit_datasource(datasources_node, ir, hyper_paths)
 
-        # Ensure all worksheet names are unique (Tableau DemandWorksheetNameUnique constraint)
+        # Ensure all worksheet names are unique and descriptive
         seen_ws_names: dict[str, int] = {}
         for ws_spec in viz_plan.worksheets:
             base = (ws_spec.name or "").strip() or "Sheet"
+            base_lower = base.lower().strip()
+            if "visualization" in base_lower or base_lower.startswith("viz"):
+                if getattr(ws_spec, "label", None) and ws_spec.label and ws_spec.label.name:
+                    base = ws_spec.label.name
+                elif getattr(ws_spec, "rows", None) and ws_spec.rows and ws_spec.rows[0].name:
+                    base = ws_spec.rows[0].name
+                elif getattr(ws_spec, "columns", None) and ws_spec.columns and ws_spec.columns[0].name:
+                    base = ws_spec.columns[0].name
+
             if base in seen_ws_names:
                 seen_ws_names[base] += 1
                 ws_spec.name = f"{base} ({seen_ws_names[base]})"
@@ -355,8 +364,13 @@ class TableauEmitterAgent:
             agg = getattr(f_obj, "aggregation", None)
             if not agg:
                 lower = str(meas_name).lower()
-                if any(k in lower for k in ["avg", "average", "rate", "score", "days", "time", "ratio", "percent"]):
-                    agg = "Avg"
+                if "row count" in lower or lower == "count":
+                    agg = "Sum"
+                elif any(k in lower for k in ["avg", "average", "mean", "rate", "score", "days", "time", "severity", "ratio", "percent", "per"]):
+                    if "row count" in lower:
+                        agg = "Sum"
+                    else:
+                        agg = "Avg"
                 else:
                     agg = "Sum"
             deriv = agg.capitalize() if isinstance(agg, str) else "Sum"
@@ -369,19 +383,43 @@ class TableauEmitterAgent:
                 "datasource": "federated.default",
             })
             for dim_name in used_dims:
-                etree.SubElement(ds_deps, "column", attrib={
-                    "datatype": "string",
-                    "name": f"[{dim_name}]",
-                    "role": "dimension",
-                    "type": "nominal",
-                })
-                etree.SubElement(ds_deps, "column-instance", attrib={
-                    "column": f"[{dim_name}]",
-                    "derivation": "None",
-                    "name": f"[none:{dim_name}:nk]",
-                    "pivot": "key",
-                    "type": "nominal",
-                })
+                lower_d = str(dim_name).lower()
+                is_date = any(k in lower_d for k in ["date", "time", "month", "year", "day"])
+                if is_date:
+                    etree.SubElement(ds_deps, "column", attrib={
+                        "datatype": "date",
+                        "name": f"[{dim_name}]",
+                        "role": "dimension",
+                        "type": "ordinal",
+                    })
+                    etree.SubElement(ds_deps, "column-instance", attrib={
+                        "column": f"[{dim_name}]",
+                        "derivation": "MY",
+                        "name": f"[my:{dim_name}:ok]",
+                        "pivot": "key",
+                        "type": "ordinal",
+                    })
+                    etree.SubElement(ds_deps, "column-instance", attrib={
+                        "column": f"[{dim_name}]",
+                        "derivation": "None",
+                        "name": f"[none:{dim_name}:nk]",
+                        "pivot": "key",
+                        "type": "nominal",
+                    })
+                else:
+                    etree.SubElement(ds_deps, "column", attrib={
+                        "datatype": "string",
+                        "name": f"[{dim_name}]",
+                        "role": "dimension",
+                        "type": "nominal",
+                    })
+                    etree.SubElement(ds_deps, "column-instance", attrib={
+                        "column": f"[{dim_name}]",
+                        "derivation": "None",
+                        "name": f"[none:{dim_name}:nk]",
+                        "pivot": "key",
+                        "type": "nominal",
+                    })
             for meas_name, f_obj in used_meas.items():
                 deriv, _, pill_name = _get_meas_pill_info(meas_name, f_obj)
                 etree.SubElement(ds_deps, "column", attrib={
@@ -413,8 +451,10 @@ class TableauEmitterAgent:
 
         # 3. panes
         panes = etree.SubElement(table, "panes")
+        meas_rows = [r for r in ws_spec.rows if getattr(r, "field_type", "") == "measure"]
         meas_cols = [c for c in ws_spec.columns if getattr(c, "field_type", "") == "measure"]
-        is_combo_dual = len(meas_cols) >= 2
+        is_combo_dual = (len(meas_rows) >= 2) or (len(meas_cols) >= 2)
+        raw_mark = ws_spec.mark_type or "automatic"
 
         # Primary Pane (id="0")
         pane = etree.SubElement(panes, "pane", attrib={"id": "0"})
@@ -422,7 +462,6 @@ class TableauEmitterAgent:
         etree.SubElement(pane_view, "breakdown", attrib={"value": "auto"})
 
         # Primary Mark class
-        raw_mark = ws_spec.mark_type or "automatic"
         mark_class = MARK_CLASS_MAP.get(raw_mark.lower(), "Automatic")
         etree.SubElement(pane, "mark", attrib={"class": mark_class})
 
@@ -438,9 +477,14 @@ class TableauEmitterAgent:
                 })
             if ws_spec.size:
                 _, col_key, _ = _get_meas_pill_info(ws_spec.size.name, ws_spec.size)
-                etree.SubElement(encodings, "size", attrib={
-                    "column": col_key,
-                })
+                if mark_class == "Pie":
+                    etree.SubElement(encodings, "wedge-size", attrib={
+                        "column": col_key,
+                    })
+                else:
+                    etree.SubElement(encodings, "size", attrib={
+                        "column": col_key,
+                    })
             if ws_spec.label:
                 if ws_spec.label.field_type == "measure":
                     _, col_key, _ = _get_meas_pill_info(ws_spec.label.name, ws_spec.label)
@@ -479,15 +523,21 @@ class TableauEmitterAgent:
                 else:
                     _, pill_full, _ = _get_meas_pill_info(r.name, r)
                     row_pills.append(pill_full)
-            rows_el.text = " ".join(row_pills)
+            rows_el.text = " + ".join(row_pills) if (is_combo_dual and len(meas_rows) >= 2) else " ".join(row_pills)
 
         # 5. cols
         cols_el = etree.SubElement(table, "cols")
         if ws_spec.columns:
             col_pills = []
+            ws_title_clean = (ws_spec.name or "").lower()
             for c in ws_spec.columns:
                 if c.field_type == "dimension":
-                    col_pills.append(f"[federated.default].[none:{c.name}:nk]")
+                    lower_c = str(c.name).lower()
+                    is_date_dim = any(k in lower_c for k in ["date", "time", "month", "year", "day"])
+                    if is_date_dim and (is_combo_dual or raw_mark.lower() in ("line", "area", "combo") or "trend" in ws_title_clean or "monthly" in ws_title_clean):
+                        col_pills.append(f"[federated.default].[my:{c.name}:ok]")
+                    else:
+                        col_pills.append(f"[federated.default].[none:{c.name}:nk]")
                 else:
                     _, pill_full, _ = _get_meas_pill_info(c.name, c)
                     col_pills.append(pill_full)
@@ -658,17 +708,19 @@ class TableauEmitterAgent:
             content = content.replace(abs_path, new_path)
 
             # Record rewrite
-            rewrite = DatasourcePathRewrite(
-                id=str(uuid.uuid4()),
-                job_id=self.job.id,
-                ir_datasource_id=domain,
-                staging_path=f"Data/Extracts/{domain}.hyper",
-                production_path=f"Data/Extracts/{domain}.hyper",
-            )
-            self.db.add(rewrite)
+            if self.db and self.job:
+                rewrite = DatasourcePathRewrite(
+                    id=str(uuid.uuid4()),
+                    job_id=self.job.id,
+                    ir_datasource_id=domain,
+                    staging_path=f"Data/Extracts/{domain}.hyper",
+                    production_path=f"Data/Extracts/{domain}.hyper",
+                )
+                self.db.add(rewrite)
 
         twb_path.write_text(content, encoding="utf-8")
-        self.db.commit()
+        if self.db and hasattr(self.db, "commit"):
+            self.db.commit()
 
     # ── TWBX packaging ──────────────────────────────────────────
 
@@ -706,6 +758,9 @@ class TableauEmitterAgent:
         self, path: Path, name: str, artifact_type: str = "workbook"
     ):
         """Record emitted artifact in database."""
+        if not (self.db and self.job):
+            return
+
         content_hash = ""
         file_size = 0
         if path.exists():
