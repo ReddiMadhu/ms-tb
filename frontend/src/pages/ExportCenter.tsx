@@ -95,26 +95,6 @@ export default function ExportCenter() {
 
   return (
     <div style={{ maxWidth: '1440px', margin: '0 auto' }}>
-      {/* ── KPI Header Grid (Matching db-tb DeploymentReviewDetail) ─ */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px', marginBottom: '20px' }}>
-        <div style={kpiCard}>
-          <span style={kpiLabel}>Exportable Artifacts</span>
-          <span style={kpiValue}>{artifacts.length} Files</span>
-        </div>
-        <div style={kpiCard}>
-          <span style={kpiLabel}>Target Tableau Version</span>
-          <span style={{ ...kpiValue, fontSize: '1.125rem', paddingTop: '4px' }}>Tableau {targetVersion}</span>
-        </div>
-        <div style={kpiCard}>
-          <span style={kpiLabel}>Destination Project</span>
-          <span style={{ ...kpiValue, fontSize: '1.125rem', color: 'var(--primary)', paddingTop: '4px' }}>{targetProject}</span>
-        </div>
-        <div style={kpiCard}>
-          <span style={kpiLabel}>Deployment Readiness</span>
-          <span style={{ ...kpiValue, color: 'var(--green)' }}>Ready</span>
-        </div>
-      </div>
-
       {/* ── Toolbar: Tab Selector ────────────────────────────────── */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', marginBottom: '16px', flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -137,7 +117,8 @@ export default function ExportCenter() {
 
       {/* ── Tab Content ───────────────────────────────────────────── */}
       {activeTab === 'ARTIFACTS' ? (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(360px, 1fr))', gap: '16px' }}>
+        <div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(360px, 1fr))', gap: '16px' }}>
           {artifacts.map((art) => {
             const isTwbx = (art.file_name || '').endsWith('.twbx');
             const isHyper = (art.file_name || '').endsWith('.hyper');
@@ -176,32 +157,9 @@ export default function ExportCenter() {
                           <span className="tool-chip mono" style={{ fontSize: '0.6875rem' }}>
                             {art.type}
                           </span>
-                          {isTwbx && (
-                            <span
-                              style={{
-                                fontSize: '0.6875rem',
-                                fontWeight: 600,
-                                padding: '1px 6px',
-                                borderRadius: '4px',
-                                background: (art.environment === 'production' || art.file_name.includes('_prod'))
-                                  ? 'var(--primary-tint, rgba(99, 102, 241, 0.12))'
-                                  : 'var(--blue-tint, rgba(0, 168, 204, 0.12))',
-                                color: (art.environment === 'production' || art.file_name.includes('_prod'))
-                                  ? 'var(--primary, #6366f1)'
-                                  : 'var(--blue, #00a8cc)',
-                                border: `1px solid ${(art.environment === 'production' || art.file_name.includes('_prod')) ? 'var(--primary, rgba(99, 102, 241, 0.3))' : 'var(--blue, rgba(0, 168, 204, 0.3))'}`,
-                              }}
-                            >
-                              {(art.environment === 'production' || art.file_name.includes('_prod')) ? 'Production Package' : 'Staging / Verification'}
-                            </span>
-                          )}
                         </div>
                       </div>
                     </div>
-
-                    <span style={{ fontSize: '0.75rem', color: 'var(--green)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '3px' }}>
-                      <CheckCircle2 size={13} /> Generated
-                    </span>
                   </div>
 
                   <p style={{ fontSize: '0.8125rem', color: 'var(--ink-2)', margin: 0, lineHeight: 1.5 }}>
@@ -235,6 +193,88 @@ export default function ExportCenter() {
               </div>
             );
           })}
+
+          {/* ── Card 3: Complete Migration Documentation (.xlsx) ── */}
+          <div
+            style={{
+              background: 'var(--surface)',
+              border: '1px solid var(--line)',
+              borderRadius: 'var(--radius-lg)',
+              padding: '20px',
+              boxShadow: 'var(--shadow-card)',
+              display: 'flex',
+              flexDirection: 'column',
+              justifyContent: 'space-between',
+              gap: '16px',
+            }}
+          >
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <div
+                    style={{
+                      width: '36px',
+                      height: '36px',
+                      borderRadius: 'var(--radius-sm)',
+                      background: 'rgba(34, 197, 94, 0.12)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      color: 'var(--green, #22c55e)',
+                    }}
+                  >
+                    <FileSpreadsheet size={18} />
+                  </div>
+                  <div>
+                    <h4 style={{ fontSize: '0.9375rem', fontWeight: 700, color: 'var(--ink)', margin: 0 }}>
+                      {job?.name ? `${job.name}_Documentation.xlsx` : 'Complete Migration Documentation.xlsx'}
+                    </h4>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '4px' }}>
+                      <span className="tool-chip mono" style={{ fontSize: '0.6875rem' }}>
+                        documentation
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <p style={{ fontSize: '0.8125rem', color: 'var(--ink-2)', margin: 0, lineHeight: 1.5 }}>
+                Comprehensive extraction &amp; translation report: Overview &amp; KPIs, MSTR Source Metadata, Metric &amp; Logic Translation Matrix, Visual &amp; Worksheet Mapping, and Execution Audit Trail.
+              </p>
+            </div>
+
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                paddingTop: '12px',
+                borderTop: '1px solid var(--line)',
+              }}
+            >
+              <span className="mono" style={{ fontSize: '0.75rem', color: 'var(--ink-3)' }}>
+                65 KB
+              </span>
+
+              <button
+                type="button"
+                onClick={() => jobId && api.downloadExcelReport(jobId, job?.name)}
+                className="btn btn-primary"
+                style={{
+                  padding: '6px 12px',
+                  fontSize: '0.75rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  background: 'var(--green, #22c55e)',
+                  borderColor: 'var(--green, #22c55e)',
+                }}
+              >
+                <Download size={13} /> Download
+              </button>
+            </div>
+          </div>
+          </div>
         </div>
       ) : (
         /* XML Preview Tab */
@@ -267,27 +307,3 @@ export default function ExportCenter() {
     </div>
   );
 }
-
-const kpiCard: React.CSSProperties = {
-  padding: '16px',
-  background: 'var(--surface)',
-  borderRadius: 'var(--radius-md)',
-  border: '1px solid var(--line)',
-  display: 'flex',
-  flexDirection: 'column',
-  gap: '4px',
-};
-
-const kpiLabel: React.CSSProperties = {
-  fontSize: '0.6875rem',
-  fontWeight: 600,
-  textTransform: 'uppercase',
-  letterSpacing: '0.04em',
-  color: 'var(--ink-3)',
-};
-
-const kpiValue: React.CSSProperties = {
-  fontSize: '1.5rem',
-  fontWeight: 700,
-  color: 'var(--ink)',
-};

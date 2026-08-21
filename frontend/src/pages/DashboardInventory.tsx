@@ -413,21 +413,21 @@ export default function DashboardInventory() {
       {/* ── Executive Conversion Summary Cards ───────────────────────── */}
       <div className={styles.summaryGrid}>
         <div className={styles.summaryCard}>
-          <span className={styles.summaryLabel}>Source Dossier</span>
+          <span className={styles.summaryLabel}>MSTR Source Dossier</span>
           <span className={styles.summaryValue} style={{ fontSize: '1.125rem', paddingTop: '4px' }}>
             {dossierName}
           </span>
         </div>
         <div className={styles.summaryCard}>
-          <span className={styles.summaryLabel}>Visual Worksheets</span>
+          <span className={styles.summaryLabel}>MSTR Visualizations</span>
           <span className={styles.summaryValue}>{totalVisuals}</span>
         </div>
         <div className={styles.summaryCard}>
-          <span className={styles.summaryLabel}>Converted Worksheets</span>
+          <span className={styles.summaryLabel}>Tableau Worksheets</span>
           <span className={`${styles.summaryValue} ${styles.summaryValueSuccess}`}>{successCount}</span>
         </div>
         <div className={styles.summaryCard}>
-          <span className={styles.summaryLabel}>Conversion Parity</span>
+          <span className={styles.summaryLabel}>Visual Conversion Parity</span>
           <span className={`${styles.summaryValue} ${styles.summaryValueSuccess}`}>{parityRate}%</span>
         </div>
       </div>
@@ -440,7 +440,7 @@ export default function DashboardInventory() {
             className={`${styles.tabBtn} ${activeTab === 'CARDS' ? styles.tabBtnActive : ''}`}
             onClick={() => setActiveTab('CARDS')}
           >
-            <LayoutDashboard size={15} /> Visual Conversion Cards
+            <LayoutDashboard size={15} /> MSTR Visualizations ➔ Tableau Worksheets
             <span className={styles.badgeCount}>{filteredVisuals.length}</span>
           </button>
           <button
@@ -448,7 +448,7 @@ export default function DashboardInventory() {
             className={`${styles.tabBtn} ${activeTab === 'TABLE' ? styles.tabBtnActive : ''}`}
             onClick={() => setActiveTab('TABLE')}
           >
-            <Grid size={15} /> Worksheet Matrix View
+            <Grid size={15} /> MSTR Visual Matrix View
           </button>
         </div>
 
@@ -458,7 +458,7 @@ export default function DashboardInventory() {
               <Search size={14} style={{ color: 'var(--ink-3)' }} />
               <input
                 type="text"
-                placeholder="Search visual worksheet or chart type..."
+                placeholder="Search MSTR visual or Tableau worksheet..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
               />
@@ -513,13 +513,13 @@ export default function DashboardInventory() {
                     <div className={styles.visualSideColumn}>
                       <div className={styles.columnHeader}>
                         <span className={`${styles.columnHeaderTitle} ${styles.mstrAccent}`}>
-                          <Layers size={13} /> MicroStrategy Dossier Visual
+                          <Layers size={13} /> MicroStrategy Dossier Visual (Grid / Graph)
                         </span>
                       </div>
 
                       <div className={styles.fieldGroup}>
                         <div className={styles.fieldRow}>
-                          <span className={styles.fieldLabel}>Visual Type:</span>
+                          <span className={styles.fieldLabel}>MSTR Visual Type:</span>
                           <span className={styles.fieldValue}>{card.mstr.type}</span>
                         </div>
                         <div className={styles.fieldRow}>
@@ -567,7 +567,7 @@ export default function DashboardInventory() {
                     <div className={styles.visualSideColumn}>
                       <div className={styles.columnHeader}>
                         <span className={`${styles.columnHeaderTitle} ${styles.tableauAccent}`}>
-                          <FileSpreadsheet size={13} /> Tableau Target Worksheet
+                          <FileSpreadsheet size={13} /> Tableau Target Worksheet (Dashboard View)
                         </span>
                       </div>
 

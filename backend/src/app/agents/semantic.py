@@ -23,6 +23,7 @@ Fix (ADR-032): Managed metrics (auto-created from file-based cube imports)
 
 import asyncio
 import logging
+import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -369,14 +370,15 @@ class SemanticAgent:
         if any(m in sub_type for m in MANAGED_METRIC_SUBTYPES):
             return True
 
-        # Check 2: explicit managed flag
-        if detail.get("managed") or detail.get("isManaged"):
+        # Check 2: explicit managed / derived flags
+        if detail.get("managed") or detail.get("isManaged") or detail.get("isDerived"):
             return True
 
-        # Check 3: minimal stub — the exact format from cube availableObjects:
-        # {"id": "...", "name": "...", "type": "metric"} with NO other fields.
-        # Real schema metrics fetched via Model API have expression, subType,
-        # dataType, metricSubtotals, etc.
+        # Check 3: runtime mx indicator with explicit formula f or mexp
+        if "f" in detail and "mexp" in detail:
+            return True
+
+        # Check 4: minimal stub — format from cube availableObjects
         STUB_KEYS = {"id", "name", "type"}
         MANAGED_INDICATOR_KEYS = {
             "expression", "formula", "formulaText", "subType",
@@ -384,59 +386,134 @@ class SemanticAgent:
             "information", "dimty", "conditionality",
         }
         dict_keys = set(detail.keys())
-        # Must have at least id and name to be a real metric stub
         has_id_and_name = "id" in dict_keys and "name" in dict_keys
-        # If only stub keys present AND no schema-level keys → managed stub
         if has_id_and_name and \
-           dict_keys <= (STUB_KEYS | {"subtype", "description", "hidden"}) and \
+           dict_keys <= (STUB_KEYS | {"subtype", "description", "hidden", "subtotalType", "aggregation", "defaultAggregationFunction"}) and \
            not (dict_keys & MANAGED_INDICATOR_KEYS):
-            # Final guard: type must be "metric" (not attribute/filter/etc.)
             if str(detail.get("type", "")).lower() in ("metric", "4", ""):
                 return True
 
         return False
 
+    @staticmethod
+    def _convert_mstr_formula_to_tableau(formula_str: Any, name: str = "", agg_func: Optional[int] = None, format_spec: Optional[dict] = None) -> tuple[str, float]:
+        """
+        Convert a MicroStrategy formula string 'f' or aggregation into a valid Tableau calculation.
+        Returns (tableau_calc, confidence).
+        """
+        if isinstance(formula_str, dict):
+            formula_str = formula_str.get("text", "")
+        if not formula_str or not isinstance(formula_str, str):
+            agg_map = {12: "SUM", 13: "COUNT", 14: "AVG", 15: "MIN", 16: "MAX", 17: "MEDIAN", 18: "STDEV", 19: "VAR"}
+            agg = agg_map.get(agg_func, "SUM")
+            return f"{agg}([{name}])", 0.90
+
+        s = formula_str.strip()
+        # Strip trailing level markers like {~+} or {~, Region+}
+        s_clean = re.sub(r'\{[^\}]*\}', '', s).strip()
+
+        # Pattern 1: Count<Distinct=True ...>(...) -> COUNTD(...)
+        if re.search(r'Count<[^>]*Distinct\s*=\s*True[^>]*>', s_clean, re.IGNORECASE):
+            m = re.search(r'Count<[^>]*>\((.+?)\)', s_clean, re.IGNORECASE)
+            if m:
+                inner = m.group(1).strip()
+                inner = re.sub(r'@[A-Za-z0-9_]+', '', inner).strip('[] ')
+                return f"COUNTD([{inner}])", 1.0
+
+        # Pattern 2: Standard aggregates with angle options: Func<...>(arg)
+        m_agg = re.match(r'^(Avg|Sum|Count|Min|Max|Median|Stdev|Var)(?:<[^>]*>)?\((.+)\)$', s_clean, re.IGNORECASE)
+        if m_agg:
+            func = m_agg.group(1).upper()
+            inner = m_agg.group(2).strip()
+
+            # Check if inner is an IF condition: IF((Attr@ID = "1"), [Metric], 0)
+            m_if = re.match(r'^IF\s*\(\s*\((.+?)\s*=\s*("[^"]*"|\'[^\']*\'|\d+)\)\s*,\s*(.+?)\s*,\s*(.+?)\s*\)$', inner, re.IGNORECASE)
+            if m_if:
+                attr_part = m_if.group(1).strip()
+                attr_part = re.sub(r'@[A-Za-z0-9_]+', '', attr_part).strip('[] ')
+                val_part = m_if.group(2).strip()
+                then_part = m_if.group(3).strip().strip('[] ')
+                else_part = m_if.group(4).strip()
+                return f"{func}(IF [{attr_part}] = {val_part} THEN [{then_part}] ELSE {else_part} END)", 0.98
+
+            inner_clean = re.sub(r'@[A-Za-z0-9_]+', '', inner).strip('[] ')
+            return f"{func}([{inner_clean}])", 1.0
+
+        # Pattern 3: Rank(arg)
+        if re.match(r'^Rank(?:<[^>]*>)?\((.+)\)$', s_clean, re.IGNORECASE):
+            m_rank = re.search(r'Rank(?:<[^>]*>)?\((.+)\)', s_clean, re.IGNORECASE)
+            inner = m_rank.group(1).strip().strip('[] ') if m_rank else name
+            return f"RANK([{inner}])", 0.95
+
+        # Pattern 4: Ratios like [MetricA] / MetricB
+        if "/" in s_clean:
+            parts = [p.strip().strip('[] ') for p in s_clean.split("/")]
+            if len(parts) == 2:
+                return f"[{parts[0]}] / [{parts[1]}]", 0.95
+
+        # Fallback to subtotalType template
+        return f"SUM([{name}])", 0.80
+
     def _build_managed_metric_def(self, obj: MigrationObject, detail: dict) -> MeasureDef:
         """
-        Build a MeasureDef for a managed metric using only cube-level metadata.
-
-        Since /api/model/metrics/{id} is not supported for managed metrics,
-        we derive the Tableau calculation from the subtotalType captured
-        during discovery from GET /api/v2/cubes/{cubeId}/availableObjects.
+        Build a MeasureDef for a managed metric using dataset mx formulas and cube metadata.
         """
-        # Prefer subtotalType from stored definition, default to SUM
+        f_str = obj.expression_text or detail.get("f") or detail.get("formula") or detail.get("expression") or ""
+        agg_func = detail.get("aggFunc")
+        nf = detail.get("nf") or detail.get("onf") or detail.get("format")
+
         raw_subtotal = (
             detail.get("subtotalType")
             or detail.get("aggregation")
             or detail.get("defaultAggregationFunction")
-            or "SUM"
         )
-        subtotal_type = str(raw_subtotal).upper().strip()
 
-        # Derive Tableau calculation from subtotal
-        calc_template = SUBTOTAL_TO_TABLEAU.get(subtotal_type, "SUM([{name}])")
-        loc_name = obj.name
-        tableau_calc = calc_template.format(name=loc_name)
+        if f_str:
+            tableau_calc, confidence = self._convert_mstr_formula_to_tableau(
+                f_str, obj.name, agg_func=agg_func, format_spec=nf
+            )
+        elif raw_subtotal:
+            subtotal_type = str(raw_subtotal).upper().strip()
+            calc_template = SUBTOTAL_TO_TABLEAU.get(subtotal_type, "SUM([{name}])")
+            tableau_calc = calc_template.format(name=obj.name)
+            confidence = 0.85
+        elif agg_func:
+            agg_map = {12: "SUM", 13: "COUNT", 14: "AVG", 15: "MIN", 16: "MAX", 17: "MEDIAN", 18: "STDEV", 19: "VAR"}
+            subtotal_type = agg_map.get(agg_func, "SUM")
+            tableau_calc = f"{subtotal_type}([{obj.name}])"
+            confidence = 0.85
+        else:
+            subtotal_type = "SUM"
+            tableau_calc = f"SUM([{obj.name}])"
+            confidence = 0.85
 
-        # Confidence: managed metrics are structurally known, no expression tree risk
-        # Give 0.85 — we know the aggregation but not any filter/dimty complexity
-        confidence = 0.85
+        subtotal_type = "SUM"
+        if "AVG" in tableau_calc[:4]:
+            subtotal_type = "AVG"
+        elif "COUNTD" in tableau_calc[:7]:
+            subtotal_type = "COUNTD"
+        elif "COUNT" in tableau_calc[:6]:
+            subtotal_type = "COUNT"
+        elif "MAX" in tableau_calc[:4]:
+            subtotal_type = "MAX"
+        elif "MIN" in tableau_calc[:4]:
+            subtotal_type = "MIN"
 
         logger.info(
-            "Managed metric '%s' (%s): derived tableau_calc=%r from subtotalType=%r",
-            obj.name, obj.mstr_id, tableau_calc, subtotal_type,
+            "Managed metric '%s' (%s): formula=%r -> tableau_calc=%r (confidence=%.2f)",
+            obj.name, obj.mstr_id, f_str, tableau_calc, confidence,
         )
 
         return MeasureDef(
             mstr_id=obj.mstr_id,
             name=obj.name,
-            expression_ast=None,
-            expression_text=f"{subtotal_type}({obj.name})",   # human-readable
-            precomputed_calc=tableau_calc,                      # used by IRCompiler directly
+            expression_ast=detail.get("mexp"),
+            expression_text=f_str or f"{subtotal_type}({obj.name})",
+            precomputed_calc=tableau_calc,
             dimty=None,
             conditionality=None,
             subtotal_type=subtotal_type,
-            format_spec=detail.get("format"),
+            format_spec=nf,
             thresholds=[],
             dependencies=[],
             confidence=confidence,
@@ -478,11 +555,10 @@ class SemanticAgent:
         try:
             detail = await self.mstr.get_metric(obj.mstr_id)
         except MSTRAPIError as e:
-            # HTTP 500 with code 8004d72a = managed metric — fall back gracefully
-            if e.status_code == 500 and "8004d72a" in str(e):
-                logger.warning(
-                    "Metric '%s' (%s) rejected by Model API (8004d72a managed metric) — "
-                    "falling back to cube-level definition",
+            # 404 (not in metadata 8004c767) or 500 (managed/subtotal 8004d72a/8004d706)
+            if e.status_code in (404, 500) or any(code in str(e) for code in ("8004c767", "8004d72a", "8004d706")):
+                logger.info(
+                    "Metric '%s' (%s) not in Modeling metadata — using harvested dossier/cube definition",
                     obj.name, obj.mstr_id,
                 )
                 return self._build_managed_metric_def(obj, cached_def)

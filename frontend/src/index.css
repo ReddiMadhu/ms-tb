@@ -25,9 +25,9 @@
   --inset: #eaeaed;
 
   /* Ink */
-  --ink: #1a1a1e;
-  --ink-2: #65656d;
-  --ink-3: #9e9ea7;
+  --ink: #111827;
+  --ink-2: #374151;
+  --ink-3: #6b7280;
   --ink-inverted: #ffffff;
 
   /* Lines */
@@ -93,10 +93,10 @@
   --field: #1c1c21;
   --inset: #141417;
 
-  --ink: #f0f0f2;
-  --ink-2: #9e9ea7;
-  --ink-3: #65656d;
-  --ink-inverted: #1a1a1e;
+  --ink: #ffffff;
+  --ink-2: #e4e4e7;
+  --ink-3: #d4d4d8;
+  --ink-inverted: #111827;
 
   --line: rgba(255, 255, 255, 0.07);
   --line-strong: rgba(255, 255, 255, 0.14);

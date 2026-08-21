@@ -261,6 +261,19 @@ class DiscoveryAgent:
             dossier_obj.mstr_definition = definition
             self.db.commit()
 
+        # Harvest runtime instance dataset details to capture exact metric formulas ('f', 'mexp', 'aggFunc', 'nf')
+        instance_datasets: dict[str, dict] = {}
+        try:
+            inst_resp = await self._mstr.create_dossier_instance(dossier_id)
+            iid = inst_resp.get("mid") or inst_resp.get("instanceId")
+            if iid:
+                inst_details = await self._mstr.get_dossier_instance_details(dossier_id, iid)
+                if isinstance(inst_details, dict) and isinstance(inst_details.get("datasets"), dict):
+                    instance_datasets = inst_details["datasets"]
+                    logger.info("Successfully harvested runtime instance datasets for dossier %s (datasets: %s)", dossier_id, list(instance_datasets.keys()))
+        except Exception as e:
+            logger.debug("Could not fetch dossier runtime instance for %s: %s", dossier_id, e)
+
         for ds in datasets:
             if not isinstance(ds, dict):
                 continue
@@ -288,6 +301,30 @@ class DiscoveryAgent:
             available = ds.get("availableObjects")
             raw_attrs: list[dict] = []
             raw_metrics: list[dict] = []
+
+            # 1. Harvest from runtime instance dataset 'mx' (highest fidelity formulas)
+            inst_ds = instance_datasets.get(ds_id, {})
+            if isinstance(inst_ds, dict) and isinstance(inst_ds.get("mx"), list):
+                for mx_m in inst_ds["mx"]:
+                    if not isinstance(mx_m, dict):
+                        continue
+                    m_id = mx_m.get("did") or mx_m.get("id")
+                    m_name = mx_m.get("n") or mx_m.get("name")
+                    m_formula = mx_m.get("f") or mx_m.get("formula")
+                    if m_id and m_name:
+                        raw_metrics.append({
+                            "id": m_id,
+                            "name": m_name,
+                            "type": "metric",
+                            "formula": m_formula,
+                            "expression": m_formula,
+                            "f": m_formula,
+                            "aggFunc": mx_m.get("aggFunc"),
+                            "mexp": mx_m.get("mexp"),
+                            "nf": mx_m.get("nf") or mx_m.get("onf"),
+                            "isSmart": mx_m.get("isSmart"),
+                            "dataType": "double",
+                        })
 
             if isinstance(available, dict):
                 if isinstance(available.get("attributes"), list):
@@ -422,6 +459,12 @@ class DiscoveryAgent:
         """Extract human-readable expression text from metric API response."""
         if not isinstance(metric_detail, dict):
             return None
+        if metric_detail.get("f"):
+            return metric_detail["f"]
+        if metric_detail.get("formula"):
+            return metric_detail["formula"]
+        if isinstance(metric_detail.get("expression"), str):
+            return metric_detail["expression"]
         expr = metric_detail.get("expression", {})
         if isinstance(expr, dict):
             return expr.get("text", None)

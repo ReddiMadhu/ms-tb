@@ -555,6 +555,17 @@ export const api = {
       body: JSON.stringify({ format }),
     }),
 
+  downloadExcelReport: (jobId: string, jobName?: string) => {
+    const url = `/api/v1/jobs/${jobId}/export/excel`;
+    const a = document.createElement('a');
+    a.href = url;
+    const safeName = (jobName || 'Migration').replace(/[^a-zA-Z0-9_-]/g, '_');
+    a.download = `Migration_Documentation_${safeName}_${jobId.slice(0, 8)}.xlsx`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  },
+
   getPublishStatus: (jobId: string) =>
     fetchJSON<PublishStatusResponse>(`/jobs/${jobId}/publish-status`),
 

@@ -135,7 +135,7 @@ class TableauEmitterAgent:
         worksheets_node = etree.SubElement(root, "worksheets")
         for ws_spec in viz_plan.worksheets:
             if not ws_spec.is_failed:
-                self._emit_worksheet(worksheets_node, ws_spec)
+                self._emit_worksheet(worksheets_node, ws_spec, ir=ir)
 
         # Step 4: Add dashboards
         dashboards_node = etree.SubElement(root, "dashboards")
@@ -286,13 +286,23 @@ class TableauEmitterAgent:
                 "type": "quantitative",
             })
 
-            # Formula with XML entity encoding (only for non-trivial calculated fields)
             formula = (getattr(measure, "tableau_calc", "") or "").strip()
             loc_name = getattr(measure, "local_name", getattr(measure, "caption", ""))
             meas_name = getattr(measure, "name", loc_name)
-            self_sum = f"SUM([{loc_name}])"
-            self_sum_name = f"SUM([{meas_name}])"
-            if formula and formula != self_sum and formula != self_sum_name and (formula != f"[{loc_name}]" and formula != f"[{meas_name}]"):
+
+            self_refs = {
+                f"[{loc_name}]", f"[{meas_name}]",
+                f"SUM([{loc_name}])", f"SUM([{meas_name}])",
+                f"AVG([{loc_name}])", f"AVG([{meas_name}])",
+                f"COUNT([{loc_name}])", f"COUNT([{meas_name}])",
+                f"COUNTD([{loc_name}])", f"COUNTD([{meas_name}])",
+                f"MIN([{loc_name}])", f"MIN([{meas_name}])",
+                f"MAX([{loc_name}])", f"MAX([{meas_name}])",
+                f"MEDIAN([{loc_name}])", f"MEDIAN([{meas_name}])",
+            }
+
+            # Only emit <calculation> for truly derived expressions (not self-referencing raw fact columns)
+            if formula and formula not in self_refs:
                 etree.SubElement(col, "calculation", attrib={
                     "class": "tableau",
                     "formula": xml_escape(formula),
@@ -318,7 +328,7 @@ class TableauEmitterAgent:
 
         return result
 
-    def _emit_worksheet(self, parent, ws_spec):
+    def _emit_worksheet(self, parent, ws_spec, ir=None):
         """Emit a schema-valid <worksheet> element with all required XSD children and pill bindings."""
         ws = etree.SubElement(parent, "worksheet", attrib={
             "name": ws_spec.name,
@@ -360,7 +370,21 @@ class TableauEmitterAgent:
             "name": "federated.default",
         })
 
+        calc_map = {}
+        if ir and hasattr(ir, "measures"):
+            for m in ir.measures:
+                calc_map[getattr(m, "local_name", "")] = getattr(m, "tableau_calc", "")
+                calc_map[getattr(m, "caption", "")] = getattr(m, "tableau_calc", "")
+                calc_map[getattr(m, "name", "")] = getattr(m, "tableau_calc", "")
+
         def _get_meas_pill_info(meas_name, f_obj=None):
+            calc_formula = calc_map.get(meas_name, "")
+            has_agg_in_calc = bool(calc_formula) and (
+                any(func in calc_formula.upper() for func in ["SUM(", "AVG(", "COUNT(", "COUNTD(", "MIN(", "MAX(", "MEDIAN(", "RANK("]) or "/" in calc_formula
+            )
+            if has_agg_in_calc:
+                return "User", f"[federated.default].[usr:{meas_name}:qk]", f"[usr:{meas_name}:qk]"
+
             agg = getattr(f_obj, "aggregation", None)
             if not agg:
                 lower = str(meas_name).lower()
@@ -523,7 +547,7 @@ class TableauEmitterAgent:
                 else:
                     _, pill_full, _ = _get_meas_pill_info(r.name, r)
                     row_pills.append(pill_full)
-            rows_el.text = " + ".join(row_pills) if (is_combo_dual and len(meas_rows) >= 2) else " ".join(row_pills)
+            rows_el.text = " + ".join(row_pills)
 
         # 5. cols
         cols_el = etree.SubElement(table, "cols")
@@ -541,7 +565,7 @@ class TableauEmitterAgent:
                 else:
                     _, pill_full, _ = _get_meas_pill_info(c.name, c)
                     col_pills.append(pill_full)
-            cols_el.text = " + ".join(col_pills) if is_combo_dual else " ".join(col_pills)
+            cols_el.text = " + ".join(col_pills)
 
     def _emit_dashboard(self, parent, dash_spec, all_worksheets):
         """Emit a schema-valid <dashboard> element with all required XSD children and worksheet zones."""

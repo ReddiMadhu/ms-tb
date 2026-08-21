@@ -248,28 +248,28 @@ export default function Objects() {
         <div style={kpiCard}>
           <div style={statHeader}>
             <LayoutDashboard size={16} color="var(--primary)" style={{ flexShrink: 0 }} />
-            <span style={kpiLabel}>Dashboards</span>
+            <span style={kpiLabel}>MSTR Dossiers / Workbooks</span>
           </div>
           <span style={kpiValue}>{dossiers.length || 1}</span>
         </div>
         <div style={kpiCard}>
           <div style={statHeader}>
             <BarChart3 size={16} color="var(--green)" style={{ flexShrink: 0 }} />
-            <span style={kpiLabel}>Worksheets</span>
+            <span style={kpiLabel}>MSTR Visualizations / Worksheets</span>
           </div>
           <span style={kpiValue}>{worksheets.length}</span>
         </div>
         <div style={kpiCard}>
           <div style={statHeader}>
             <Calculator size={16} color="#9B51E0" style={{ flexShrink: 0 }} />
-            <span style={kpiLabel}>Calculated Fields</span>
+            <span style={kpiLabel}>MSTR Metrics / Calc Fields (CF)</span>
           </div>
           <span style={kpiValue}>{calcFields.length}</span>
         </div>
         <div style={kpiCard}>
           <div style={statHeader}>
             <Database size={16} color="var(--blue)" style={{ flexShrink: 0 }} />
-            <span style={kpiLabel}>Data Sources</span>
+            <span style={kpiLabel}>MSTR Cubes / Data Sources</span>
           </div>
           <span style={kpiValue}>{cubes.length || 1}</span>
         </div>
@@ -286,7 +286,7 @@ export default function Objects() {
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
               <BarChart3 size={15} color="var(--primary)" style={{ flexShrink: 0 }} />
               <h3 style={{ fontSize: '0.875rem', fontWeight: 700, color: 'var(--ink)', margin: 0, whiteSpace: 'nowrap' }}>
-                Worksheets / Visual Charts
+                MSTR Visualizations ➔ Tableau Worksheets
               </h3>
             </div>
             <span style={panelCountBadge}>{filteredWs.length}</span>
@@ -296,7 +296,7 @@ export default function Objects() {
             <Search size={14} className="search-icon" />
             <input
               type="text" className="input"
-              placeholder="Search worksheets or chart type..."
+              placeholder="Search MSTR visual or Tableau worksheet..."
               value={wsSearch} onChange={(e) => setWsSearch(e.target.value)}
             />
           </div>
@@ -401,7 +401,7 @@ export default function Objects() {
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
               <Calculator size={15} color="#9B51E0" style={{ flexShrink: 0 }} />
               <h3 style={{ fontSize: '0.875rem', fontWeight: 700, color: 'var(--ink)', margin: 0, whiteSpace: 'nowrap' }}>
-                Calculated Fields
+                MSTR Metrics ➔ Tableau Calculated Fields (CF)
               </h3>
             </div>
             <span style={panelCountBadge}>{filteredCalcs.length}</span>
@@ -502,10 +502,10 @@ export default function Objects() {
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px', gap: '8px', flexWrap: 'wrap' }}>
           <div>
             <h3 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--ink)', margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <Database size={18} color="var(--blue)" style={{ flexShrink: 0 }} /> Detected Data Model
+              <Database size={18} color="var(--blue)" style={{ flexShrink: 0 }} /> MicroStrategy Semantic Model &amp; Intelligent Cube Catalog
             </h3>
             <span style={{ fontSize: '0.75rem', color: 'var(--ink-3)' }}>
-              Interactive entity relationship model synthesized from MicroStrategy Intelligent Cube
+              Interactive entity relationship schema synthesized from MicroStrategy Intelligent Cube
             </span>
           </div>
 
@@ -520,7 +520,7 @@ export default function Objects() {
           {/* Canvas Diagram: Source Data Source / Table Node */}
           <div style={{ background: 'var(--surface)', borderRadius: 'var(--radius-sm)', padding: '20px', border: '1px solid var(--line)', minHeight: '180px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minWidth: 0, boxSizing: 'border-box' }}>
             <div style={{ fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: '16px', width: '100%' }}>
-              Discovered Source Data Source Entities
+              Discovered MicroStrategy Intelligent Cube Entities
             </div>
 
             <div style={diagramNode}>
@@ -537,15 +537,15 @@ export default function Objects() {
           {/* Table Detail Inspector */}
           <div style={{ background: 'var(--surface)', borderRadius: 'var(--radius-sm)', padding: '16px', border: '1px solid var(--line)', minWidth: 0, boxSizing: 'border-box' }}>
             <h4 style={{ fontSize: '0.875rem', fontWeight: 700, color: 'var(--ink)', margin: '0 0 12px 0', overflowWrap: 'anywhere' }}>
-              Source Inspector: {cubeName}
+              MicroStrategy Cube Inspector: {cubeName}
             </h4>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '8px', marginBottom: '12px' }}>
               <div style={inspectorBox}>
-                <span style={{ fontSize: '0.625rem', color: 'var(--ink-3)', fontWeight: 600 }}>Columns</span>
+                <span style={{ fontSize: '0.625rem', color: 'var(--ink-3)', fontWeight: 600 }}>MSTR Attributes &amp; Facts</span>
                 <span style={{ fontSize: '1.125rem', fontWeight: 700, color: 'var(--ink)' }}>{attributes.length + metrics.length}</span>
               </div>
               <div style={inspectorBox}>
-                <span style={{ fontSize: '0.625rem', color: 'var(--ink-3)', fontWeight: 600 }}>Calcs</span>
+                <span style={{ fontSize: '0.625rem', color: 'var(--ink-3)', fontWeight: 600 }}>MSTR Metrics / Calcs</span>
                 <span style={{ fontSize: '1.125rem', fontWeight: 700, color: '#9B51E0' }}>{calcFields.length}</span>
               </div>
             </div>

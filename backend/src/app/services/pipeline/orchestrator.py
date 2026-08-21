@@ -351,7 +351,7 @@ class PipelineOrchestrator:
                 password=self.mstr_password or settings.mstr_password,
                 project_id=job.mstr_project_id or settings.mstr_project_id,
             )
-            sync_session.login()
+            sync_session.authenticate()
             for dossier_obj in dossier_objs:
                 dossier_id = dossier_obj.mstr_id
                 try:
@@ -433,6 +433,47 @@ class PipelineOrchestrator:
                         v_attrs = v_meta.get("attributes", [])
                         v_format = v_meta.get("number_formatting", {})
 
+                        # If rows/columns were not in selector, map directly from ground-truth instance definition
+                        if not rows and not columns:
+                            if viz_type in ("kpi", "card", "metric_value"):
+                                if v_metrics:
+                                    columns = [v_metrics[0]]
+                            elif viz_type in ("bar", "bar_chart", "vertical_bar", "horizontal_bar"):
+                                if v_attrs:
+                                    rows = [v_attrs[0]]
+                                if v_metrics:
+                                    columns = [v_metrics[0]]
+                            elif viz_type in ("combo", "combo_chart"):
+                                if v_attrs:
+                                    columns = [v_attrs[0]]
+                                if v_metrics:
+                                    rows = list(v_metrics)
+                            elif viz_type in ("donut", "donut_chart", "pie", "pie_chart"):
+                                if v_attrs:
+                                    color_field = v_attrs[0]
+                                if v_metrics:
+                                    columns = [v_metrics[0]]
+                            elif viz_type in ("line", "line_chart"):
+                                if v_attrs:
+                                    columns = [v_attrs[0]]
+                                if v_metrics:
+                                    rows = [v_metrics[0]]
+                            elif viz_type in ("bubble", "bubble_chart", "scatter", "scatter_chart"):
+                                if len(v_metrics) >= 2:
+                                    columns = [v_metrics[0]]
+                                    rows = [v_metrics[1]]
+                                    if len(v_metrics) >= 3:
+                                        size_field = v_metrics[2]
+                                elif v_metrics:
+                                    columns = [v_metrics[0]]
+                                if v_attrs:
+                                    color_field = v_attrs[0]
+                            elif viz_type in ("grid", "crosstab", "microcharts"):
+                                if v_attrs:
+                                    rows = list(v_attrs)
+                                if v_metrics:
+                                    columns = list(v_metrics)
+
                         # If viz_name is a generic internal container name from MicroStrategy copy-paste,
                         # resolve it to the bound metric or attribute name if available:
                         v_name_lower = (viz_name or "").lower().strip()
@@ -503,23 +544,15 @@ class PipelineOrchestrator:
             issues=[IRIssue(**i) for i in ir_data.get("issues", [])],
         )
 
-        low_conf = [m for m in ir.measures if m.confidence < 0.85]
-        if not low_conf:
-            logger.info("No low-confidence measures — skipping AI translation")
-            return
-
         try:
             agent = AITranslationAgent(db=db, job=job, artifacts_dir=artifacts_dir)
-            if agent.llm is None:
-                logger.warning("No LLM API key configured — skipping AI translation (deterministic only)")
-                return
             await agent.run(ir)
 
             # Persist updated IR
             with open(ir_path, "w") as f:
                 json.dump(ir.to_dict(), f, indent=2, default=str)
 
-            logger.info("AI translation processed %d low-confidence measures", len(low_conf))
+            logger.info("AI translation stage completed successfully")
         except Exception as e:
             logger.warning("AI translation failed (non-fatal): %s", e)
 
@@ -712,7 +745,30 @@ class PipelineOrchestrator:
                         seen_col_names.add(col_name)
                         columns.append(TableDefinition.Column(col_name, SqlType.text()))
 
-                    for measure in ir_data.get("measures", []):
+                    # Only include base raw fact measures in the physical Hyper table.
+                    # Derived/calculated measures (e.g. Avg Claim, Paid Amount, Reserve, Total Incurred, States, etc.)
+                    # are calculated dynamically by Tableau in the TWB XML and should NEVER be physical columns in Hyper.
+                    def is_base_physical_measure(m_dict):
+                        m_name = (m_dict.get("name") or "").strip()
+                        m_local = (m_dict.get("local_name") or m_name).strip()
+                        calc = (m_dict.get("tableau_calc") or "").strip()
+
+                        # If measure formula is derived from a different column (e.g. AVG([Total Incurred USD]), SUM([Paid Amount USD]), COUNTD([State]), etc.)
+                        # it is a Tableau calculated field, not a base physical column!
+                        if calc:
+                            self_ref_sums = [f"SUM([{m_name}])", f"SUM([{m_local}])", f"[{m_name}]", f"[{m_local}]"]
+                            if calc not in self_ref_sums:
+                                return False
+
+                        # If it has calculation keywords (AVG, COUNT, COUNTD, RANK, IF, /, MAX, MIN), it's derived
+                        if any(func in calc.upper() for func in ["AVG(", "COUNT(", "COUNTD(", "RANK(", "MAX(", "MIN(", "MEDIAN(", "IF ", "/"]):
+                            return False
+
+                        return True
+
+                    base_measures = [m for m in ir_data.get("measures", []) if is_base_physical_measure(m)]
+
+                    for measure in base_measures:
                         col_name = measure.get("local_name", measure.get("name", "measure"))
                         base_name = col_name
                         idx = 1
@@ -731,14 +787,14 @@ class PipelineOrchestrator:
                         connection.catalog.create_table_if_not_exists(table_def)
 
                         dims = ir_data.get("dimensions", [])
-                        measures = ir_data.get("measures", [])
+                        measures = base_measures
                         total_col_count = len(columns)
 
                         with Inserter(connection, table_def) as inserter:
                             if live_extracted_rows:
                                 # Stream all live extracted rows with name-based column mapping.
                                 # _parse_mstr_response now returns list[dict] keyed by field name.
-                                logger.info("Inserting %d live MSTR rows into Hyper extract...", len(live_extracted_rows))
+                                logger.info("Inserting %d live MSTR rows into Hyper extract (%d physical columns)...", len(live_extracted_rows), len(columns))
 
                                 def _get_field_val(row_dict, *candidate_keys):
                                     for k in candidate_keys:

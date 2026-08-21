@@ -330,6 +330,31 @@ class IRCompilerAgent:
                 ir_measure.caption, measure.name
             )
 
+            # Persist compiled calculation to MigrationObject in DB for API & Logic Explorer
+            if self.db and self.job:
+                try:
+                    obj = (
+                        self.db.query(MigrationObject)
+                        .filter(
+                            MigrationObject.job_id == self.job.id,
+                            MigrationObject.mstr_id == measure.mstr_id,
+                        )
+                        .first()
+                    )
+                    if obj:
+                        obj.tableau_calc = tableau_calc
+                        obj.expression_text = measure.expression_text
+                        obj.confidence = measure.confidence
+                        obj.translation_method = "AST Expression Engine"
+                except Exception as db_err:
+                    logger.debug("Could not update MigrationObject for %s: %s", measure.name, db_err)
+
+        if self.db:
+            try:
+                self.db.commit()
+            except Exception:
+                pass
+
         # ── Step 5: Filters ─────────────────────────────────────
 
         for flt in semantic_bundle.filters:

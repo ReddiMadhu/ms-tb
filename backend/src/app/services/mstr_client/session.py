@@ -316,6 +316,11 @@ class MSTRSession:
         resp = self.post(f"/api/dossiers/{dossier_id}/instances", json={})
         return resp.json()
 
+    def get_dossier_instance_details(self, dossier_id: str, instance_id: str) -> dict:
+        """GET /api/dossiers/{id}/instances/{iid} — full runtime instance definition including datasets.mx metric formulas."""
+        resp = self.get(f"/api/dossiers/{dossier_id}/instances/{instance_id}")
+        return resp.json()
+
     def get_visualization_definition(
         self,
         dossier_id: str,
@@ -507,6 +512,9 @@ class AsyncMSTRSession:
 
     async def create_dossier_instance(self, dossier_id: str) -> dict:
         return await asyncio.to_thread(self._session.create_dossier_instance, dossier_id)
+
+    async def get_dossier_instance_details(self, dossier_id: str, instance_id: str) -> dict:
+        return await asyncio.to_thread(self._session.get_dossier_instance_details, dossier_id, instance_id)
 
     async def get_visualization_definition(
         self,

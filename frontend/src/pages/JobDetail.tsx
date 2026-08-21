@@ -29,11 +29,13 @@ export default function JobDetailPage() {
       const jobData = await api.getJob(jobId);
       setJob(jobData);
 
-      // Auto-follow current stage → map to its phase if user hasn't manually clicked another phase
+      // Keep stepper focused on the currently executing/loading phase while job is running
       const currentStage = jobData.progress?.current_stage || jobData.current_stage;
-      if (currentStage && !userSelectedPhaseRef.current) {
+      if (currentStage) {
         const phase = getPhaseForStage(currentStage);
-        if (phase) setSelectedPhaseId(phase.id);
+        if (phase && (isJobRunning(jobData.status) || !userSelectedPhaseRef.current)) {
+          setSelectedPhaseId(phase.id);
+        }
       }
     } catch (e) {
       console.error('Failed to load migration hub data:', e);

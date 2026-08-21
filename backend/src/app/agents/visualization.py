@@ -211,18 +211,35 @@ class VisualizationAgent:
         label: Optional[FieldRef] = None
         detail: list[FieldRef] = []
 
+        # Determine whether a field is a dimension or measure
+        ir_meas_names = set()
+        for m in getattr(self.ir, "measures", []):
+            ir_meas_names.add((getattr(m, "local_name", "") or "").lower())
+            ir_meas_names.add((getattr(m, "caption", "") or "").lower())
+            ir_meas_names.add((getattr(m, "name", "") or "").lower())
+        ir_meas_names.discard("")
+
+        def is_measure_field(fname: str) -> bool:
+            fl = str(fname).lower().strip()
+            if fl in ir_meas_names:
+                return True
+            return any(k in fl for k in ["count", "avg", "average", "sum", "usd", "amount", "rate", "ratio", "score", "days", "loss", "reserve", "recovery", "salvage", "subrogation", "exposure", "severity"])
+
         # Map fields to shelves based on explicit visual definitions if present
         vis_rows = getattr(visual, "rows", []) or []
         vis_cols = getattr(visual, "columns", []) or []
 
         for field_name in vis_rows:
-            rows.append(FieldRef(name=field_name))
+            ftype = "measure" if is_measure_field(field_name) else "dimension"
+            rows.append(FieldRef(name=field_name, field_type=ftype))
 
         for field_name in vis_cols:
-            columns.append(FieldRef(name=field_name))
+            ftype = "measure" if is_measure_field(field_name) else "dimension"
+            columns.append(FieldRef(name=field_name, field_type=ftype))
 
         if hasattr(visual, "color") and visual.color:
-            color = FieldRef(name=visual.color, field_type="dimension")
+            ftype = "measure" if is_measure_field(visual.color) else "dimension"
+            color = FieldRef(name=visual.color, field_type=ftype)
 
         if hasattr(visual, "size") and visual.size:
             size = FieldRef(name=visual.size, field_type="measure")
@@ -374,6 +391,15 @@ class VisualizationAgent:
                     rows.append(FieldRef(name=dim_to_use.caption or dim_to_use.name, field_type="dimension"))
                 if meas_to_use:
                     label = FieldRef(name=meas_to_use.caption or meas_to_use.name, field_type="measure")
+
+        # For KPI cards, ensure the measure is bound to the text label shelf
+        if raw_type in ("kpi", "card", "metric_value", "gauge"):
+            tableau_mark = "text"
+            if not label:
+                if columns and getattr(columns[0], "field_type", "") == "measure":
+                    label = columns.pop(0)
+                elif rows and getattr(rows[0], "field_type", "") == "measure":
+                    label = rows.pop(0)
 
         # Filters
         filters = []

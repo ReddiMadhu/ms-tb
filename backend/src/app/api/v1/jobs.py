@@ -354,9 +354,40 @@ async def generate_job_report(job_id: str, payload: dict = None, db: Session = D
 
     return {
         "job_id": job_id,
-        "report_url": f"/api/v1/jobs/{job_id}/report/download",
+        "report_url": f"/api/v1/jobs/{job_id}/export/excel",
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "format": report_format,
         "summary": summary,
     }
+
+
+@router.get("/{job_id}/export/excel")
+async def export_job_excel(job_id: str, db: Session = Depends(get_db)):
+    """
+    GET /jobs/{id}/export/excel — Generate and download comprehensive 5-sheet Excel documentation.
+    """
+    from fastapi.responses import Response
+    from app.services.excel_exporter import generate_migration_excel_bytes
+
+    job = db.query(Job).filter(Job.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+
+    try:
+        excel_bytes = generate_migration_excel_bytes(job_id, db)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to generate Excel report: {str(e)}")
+
+    safe_job_name = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in (job.name or "Migration"))
+    filename = f"Migration_Documentation_{safe_job_name}_{job_id[:8]}.xlsx"
+
+    return Response(
+        content=excel_bytes,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Access-Control-Expose-Headers": "Content-Disposition",
+        },
+    )
+
 

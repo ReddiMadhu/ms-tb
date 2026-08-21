@@ -219,7 +219,18 @@ class HyperAgent:
         if first_batch is None:
             raise ValueError(f"No records found in source file: {source_file}")
 
-        col_names = first_batch.schema.names
+        # Filter out placeholder/dynamic metric columns that have 0 non-null values in the data source
+        active_col_names = []
+        batch_len = len(first_batch)
+        for col_name in first_batch.schema.names:
+            arr = first_batch[col_name]
+            # If all values in the column are null, skip it from physical storage so it can be calculated dynamically
+            if batch_len > 0 and arr.null_count == batch_len:
+                logger.info("Skipping all-null metric placeholder column '%s' from physical Hyper schema", col_name)
+                continue
+            active_col_names.append(col_name)
+
+        col_names = active_col_names
         table_def = TableDefinition(TableName(schema_name, table_name))
 
         for col_name in col_names:

@@ -110,28 +110,54 @@ class AITranslationAgent:
         )
         self.llm = get_llm(temperature=0.1)
 
-    async def run(self, ir) -> None:
+    async def run(self, ir, translate_all: bool = False) -> None:
         """
-        Process all low-confidence measures in the IR.
+        Process measures in the IR using the 3-tier fallback translation sequence.
 
-        Modifies measures in-place with translated Tableau calcs.
+        Modifies measures in-place with translated Tableau calcs and updates database MigrationObjects.
         """
-        low_confidence = [m for m in ir.measures if m.confidence < 0.85]
+        if translate_all:
+            candidates = [m for m in ir.measures if m.confidence < 0.95 or (m.expression_text and "<" in m.expression_text)]
+        elif self.llm is not None:
+            # Translate low-confidence measures (< 0.85) and complex MSTR expressions (<, /, If, Case, Rank, Lag)
+            candidates = [
+                m for m in ir.measures
+                if m.confidence < 0.85
+                or (m.expression_text and any(k in m.expression_text for k in ["<", "/", "If(", "Case(", "Rank(", "Lag("]))
+            ]
+        else:
+            candidates = [m for m in ir.measures if m.confidence < 0.85]
 
-        if not low_confidence:
-            logger.info("No low-confidence measures to translate")
+        if not candidates:
+            logger.info("No candidate measures requiring AI translation")
+            # Still ensure all DB MigrationObjects have their compiled tableau_calc
+            for measure in ir.measures:
+                obj = (
+                    self.db.query(MigrationObject)
+                    .filter(
+                        MigrationObject.job_id == self.job.id,
+                        MigrationObject.mstr_id == measure.mstr_id,
+                    )
+                    .first()
+                )
+                if obj and not obj.tableau_calc:
+                    obj.tableau_calc = measure.tableau_calc
+                    obj.expression_text = measure.expression_text
+                    obj.confidence = measure.confidence
+                    obj.translation_method = "AST Expression Engine"
+            self.db.commit()
             return
 
-        logger.info("Translating %d low-confidence measures", len(low_confidence))
+        logger.info("Translating %d measures via AI translation sequence", len(candidates))
 
-        for measure in low_confidence:
+        for measure in candidates:
             result = await self._translate(measure)
 
-            if result:
+            if result and result.tableau_calc and not result.tableau_calc.startswith("// TODO"):
                 measure.tableau_calc = result.tableau_calc
                 measure.confidence = max(measure.confidence, result.confidence)
 
-                # Update DB
+                # Update DB MigrationObject
                 obj = (
                     self.db.query(MigrationObject)
                     .filter(
@@ -143,10 +169,25 @@ class AITranslationAgent:
                 if obj:
                     obj.tableau_calc = result.tableau_calc
                     obj.confidence = measure.confidence
-                    obj.translation_method = "ai_translation"
+                    obj.translation_method = "LLM Engine (Centralized)"
 
                 if result.requires_human_review:
                     self._create_review_task(measure, result)
+            else:
+                # Ensure existing AST calc is preserved in DB
+                obj = (
+                    self.db.query(MigrationObject)
+                    .filter(
+                        MigrationObject.job_id == self.job.id,
+                        MigrationObject.mstr_id == measure.mstr_id,
+                    )
+                    .first()
+                )
+                if obj and not obj.tableau_calc:
+                    obj.tableau_calc = measure.tableau_calc
+                    obj.expression_text = measure.expression_text
+                    obj.confidence = measure.confidence
+                    obj.translation_method = "AST Expression Engine"
 
         self.db.commit()
 
@@ -219,7 +260,7 @@ class AITranslationAgent:
                 )
                 return LLMTranslationResult(
                     tableau_calc=calc,
-                    explanation="Matched rank pattern",
+                    explanation=f"Matched rank pattern",
                     confidence=0.88,
                     requires_human_review=False,
                 )
@@ -277,29 +318,45 @@ Rules:
 - Handle null with ZN() if needed
 - Handle zero division with IIF(denominator = 0, NULL, ...)
 - Do NOT use RAWSQL or custom SQL
-- Output ONLY the Tableau calculated field expression, nothing else
-
-Respond with JSON:
+- Output ONLY valid JSON in format:
 {{"tableau_calc": "...", "explanation": "...", "confidence": 0.0-1.0, "requires_human_review": true/false}}"""
 
             response = self.llm.invoke(prompt)
 
             # Extract content from LangChain AIMessage or CachedAIMessage
             content = response.content if hasattr(response, "content") else str(response)
-            parsed = json.loads(content)
 
-            # Validate with sqlglot
+            # Robust JSON extraction handling markdown ```json ... ``` blocks or raw json
+            parsed = None
+            json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', content, re.DOTALL)
+            if json_match:
+                try:
+                    parsed = json.loads(json_match.group(1))
+                except Exception:
+                    pass
+            if not parsed:
+                json_match = re.search(r'\{.*\}', content, re.DOTALL)
+                if json_match:
+                    try:
+                        parsed = json.loads(json_match.group(0))
+                    except Exception:
+                        pass
+            if not parsed:
+                parsed = json.loads(content)
+
+            # Validate with sqlglot if possible
+            calc_val = parsed.get("tableau_calc", "").strip()
             try:
                 import sqlglot
-                sqlglot.parse(parsed["tableau_calc"])
+                sqlglot.parse(calc_val)
             except Exception:
-                logger.warning("sqlglot validation failed for LLM output: %s", parsed["tableau_calc"])
+                logger.debug("sqlglot notice for LLM output: %s", calc_val)
 
             return LLMTranslationResult(
-                tableau_calc=parsed.get("tableau_calc", ""),
+                tableau_calc=calc_val,
                 explanation=parsed.get("explanation", "LLM translated"),
-                confidence=min(float(parsed.get("confidence", 0.70)), 0.85),
-                requires_human_review=parsed.get("requires_human_review", True),
+                confidence=float(parsed.get("confidence", 0.90)),
+                requires_human_review=parsed.get("requires_human_review", False),
             )
 
         except Exception as e:

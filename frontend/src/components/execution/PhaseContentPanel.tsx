@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
+import { Loader2 } from 'lucide-react';
 import {
   getPhaseConfig,
+  getPhaseStatus,
   type PhaseConfig,
 } from '../../config/pipeline.config';
 
@@ -24,20 +26,23 @@ interface PhaseContentPanelProps {
 
 export const PhaseContentPanel: React.FC<PhaseContentPanelProps> = ({
   phaseId,
-  stageStatuses: _stageStatuses,
+  stageStatuses,
 }) => {
   const phase = getPhaseConfig(phaseId);
   const [activeTab, setActiveTab] = useState(phase?.subViews[0]?.key || '');
 
   if (!phase) return null;
 
+  const status = getPhaseStatus(phaseId, stageStatuses);
+  const isPhaseLoading = status === 'RUNNING' || status === 'WAITING';
+
   const currentTabKey = phase.subViews.some(sv => sv.key === activeTab) ? activeTab : (phase.subViews[0]?.key || '');
   const ActiveSubView = SUB_VIEW_MAP[currentTabKey];
 
   return (
     <div className="phase-content-panel">
-      {/* Sub-View Tabs (hidden if only 1 subview) */}
-      {phase.subViews.length > 1 && (
+      {/* Sub-View Tabs (hidden if only 1 subview or if phase is currently loading) */}
+      {!isPhaseLoading && phase.subViews.length > 1 && (
         <div className="phase-tabs" style={{ marginTop: 0 }}>
           {phase.subViews.map(sv => (
             <button
@@ -54,7 +59,30 @@ export const PhaseContentPanel: React.FC<PhaseContentPanelProps> = ({
 
       {/* Sub-View Content */}
       <div className="phase-tab-content">
-        {ActiveSubView && <ActiveSubView />}
+        {isPhaseLoading ? (
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              minHeight: '320px',
+              gap: '16px',
+              color: 'var(--ink-2)',
+              background: 'var(--surface)',
+              border: '1px solid var(--line)',
+              borderRadius: 'var(--radius-lg)',
+              padding: '40px 20px',
+            }}
+          >
+            <Loader2 size={36} className="spin-icon" style={{ color: 'var(--primary, #6366f1)' }} />
+            <span style={{ fontSize: '0.9375rem', fontWeight: 500 }}>
+              Loading data for this phase...
+            </span>
+          </div>
+        ) : (
+          ActiveSubView && <ActiveSubView />
+        )}
       </div>
     </div>
   );

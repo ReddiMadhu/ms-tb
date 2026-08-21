@@ -22,6 +22,7 @@ from app.api.v1.schemas import (
 )
 from app.core.config import settings
 from app.db.session import get_db
+from app.models.job import Job
 from app.models.objects import MigrationObject
 from app.services.mstr_client.session import (
     MSTRAPIError,
@@ -245,8 +246,42 @@ async def list_objects(
     total = query.count()
     objects = query.offset(offset).limit(limit).all()
 
+    # Load IR measures for ground truth calculation mapping if available
+    ir_calc_map = {}
+    job = db.query(Job).filter(Job.id == job_id).first()
+    if job and job.artifacts_dir:
+        from pathlib import Path
+        import json
+        ir_file = Path(job.artifacts_dir) / "ir.json"
+        if ir_file.exists():
+            try:
+                with open(ir_file, "r", encoding="utf-8") as f:
+                    ir_raw = json.load(f)
+                    for m in ir_raw.get("measures", []):
+                        if m.get("name"):
+                            ir_calc_map[m.get("name")] = m
+                        if m.get("local_name"):
+                            ir_calc_map[m.get("local_name")] = m
+                        if m.get("mstr_id"):
+                            ir_calc_map[m.get("mstr_id")] = m
+            except Exception:
+                pass
+
+    resp_objects = []
+    for o in objects:
+        res = ObjectResponse.model_validate(o)
+        ir_m = ir_calc_map.get(res.name) or ir_calc_map.get(res.mstr_id)
+        if ir_m and ir_m.get("tableau_calc"):
+            if not res.tableau_calc or res.tableau_calc == f"SUM([{res.name}])":
+                res.tableau_calc = ir_m.get("tableau_calc")
+            if not res.expression_text and ir_m.get("expression_text"):
+                res.expression_text = ir_m.get("expression_text")
+            if not res.translation_method:
+                res.translation_method = "AST Expression Engine"
+        resp_objects.append(res)
+
     return ObjectListResponse(
-        objects=[ObjectResponse.model_validate(o) for o in objects],
+        objects=resp_objects,
         total=total,
     )
 

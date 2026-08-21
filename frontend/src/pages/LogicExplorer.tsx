@@ -35,100 +35,36 @@ interface CalculationItem {
   explanation: string;
 }
 
-const DEFAULT_CALCULATIONS: CalculationItem[] = [
-  {
-    id: 'calc-1',
-    name: 'Total Incident Claim Ratio',
-    category: 'LOD',
-    formulaType: 'LOD / Ratio Expression',
-    sourceFormula: 'Sum([Total Claim Amount]) / NullIf(Sum([Total Incidents]), 0)',
-    targetCalc: '{ FIXED : SUM([Total Claim Amount]) } / NULLIF({ FIXED : SUM([Total Incidents]) }, 0)',
-    method: 'AST Expression Engine',
-    confidence: 0.99,
-    validationStatus: 'VALID',
-    datasource: 'Insurance_Claims_Cube',
-    explanation: 'Transpiled MSTR NullIf wrapper and aggregated metrics into Tableau Level of Detail { FIXED } expressions with null-safe division.',
-  },
-  {
-    id: 'calc-2',
-    name: 'Customer Risk Tier Classification',
-    category: 'CONDITIONAL',
-    formulaType: 'Conditional (Case / When)',
-    sourceFormula: 'Case([Loss Ratio] > 0.75, "High Risk", [Loss Ratio] > 0.40, "Medium Risk", "Low Risk")',
-    targetCalc: 'IF [Loss Ratio] > 0.75 THEN "High Risk" ELSEIF [Loss Ratio] > 0.40 THEN "Medium Risk" ELSE "Low Risk" END',
-    method: 'AST Expression Engine',
-    confidence: 0.98,
-    validationStatus: 'VALID',
-    datasource: 'Policy_Underwriting_Mart',
-    explanation: 'Converted MSTR n-ary Case statement into structured Tableau IF / ELSEIF / ELSE / END conditional syntax.',
-  },
-  {
-    id: 'calc-3',
-    name: 'Running Total Policy Inception Volume',
-    category: 'TABLE_CALC',
-    formulaType: 'Table Calculation (Running Sum)',
-    sourceFormula: 'RunningSum([New Policy Count], [Inception Date])',
-    targetCalc: 'RUNNING_SUM(SUM([New Policy Count]))',
-    method: 'Window Function Translator',
-    confidence: 0.97,
-    validationStatus: 'VALID',
-    datasource: 'Underwriting_Fact',
-    explanation: 'Mapped MSTR RunningSum cumulative metric to Tableau RUNNING_SUM table calculation addressing along date dimension.',
-  },
-  {
-    id: 'calc-4',
-    name: 'Period over Period Claim Growth Rate',
-    category: 'TABLE_CALC',
-    formulaType: 'Table Calculation (Difference %)',
-    sourceFormula: '([Total Claim Amount] - Lag([Total Claim Amount], 1, 0)) / NullIf(Lag([Total Claim Amount], 1, 0), 0)',
-    targetCalc: '(SUM([Total Claim Amount]) - LOOKUP(SUM([Total Claim Amount]), -1)) / NULLIF(ABS(LOOKUP(SUM([Total Claim Amount]), -1)), 0)',
-    method: 'AST Expression Engine',
-    confidence: 0.96,
-    validationStatus: 'VALID',
-    datasource: 'Financial_Analytics_Cube',
-    explanation: 'Converted MSTR Lag() OLAP function to Tableau LOOKUP(expr, -1) with zero-division protection.',
-  },
-  {
-    id: 'calc-5',
-    name: 'Earned Premium per Active Month',
-    category: 'STANDARD',
-    formulaType: 'Standard Measure',
-    sourceFormula: 'Sum([Gross Written Premium]) / NullIf(Avg([Policy Active Months]), 0)',
-    targetCalc: 'SUM([Gross Written Premium]) / NULLIF(AVG([Policy Active Months]), 0)',
-    method: 'Direct Semantic Mapping',
-    confidence: 1.0,
-    validationStatus: 'VALID',
-    datasource: 'Premium_Summary_Mart',
-    explanation: 'Directly compiled 1:1 mathematical formula with uppercase ANSI aggregation functions.',
-  },
-  {
-    id: 'calc-6',
-    name: 'Settlement Efficiency Index',
-    category: 'CONDITIONAL',
-    formulaType: 'Conditional / Binned Ratio',
-    sourceFormula: 'If([Avg Settlement Days] <= 14, [Settlement Score] * 1.2, [Settlement Score])',
-    targetCalc: 'IF [Avg Settlement Days] <= 14 THEN [Settlement Score] * 1.2 ELSE [Settlement Score] END',
-    method: 'AST Expression Engine',
-    confidence: 0.98,
-    validationStatus: 'VALID',
-    datasource: 'Claims_Operational_Cube',
-    explanation: 'Converted MSTR ternary If() expression into standard Tableau conditional statement.',
-  },
-];
-
 export default function LogicExplorer() {
   const { jobId } = useParams<{ jobId: string }>();
-  const [calculations, setCalculations] = useState<CalculationItem[]>(DEFAULT_CALCULATIONS);
+  const [calculations, setCalculations] = useState<CalculationItem[]>([]);
   const [activeTab, setActiveTab] = useState<'CARDS' | 'SCRIPT'>('CARDS');
   const [searchQuery, setSearchQuery] = useState('');
   const [typeFilter, setTypeFilter] = useState<string>('ALL');
   const [copiedIndex, setCopiedIndex] = useState<string | null>(null);
   const [copiedScript, setCopiedScript] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
 
   const loadCalculations = React.useCallback(async () => {
-    if (!jobId) return;
+    let targetJobId = jobId;
+    if (!targetJobId) {
+      try {
+        const res = await api.listJobs();
+        const jobList = res.jobs || [];
+        if (jobList.length > 0) {
+          targetJobId = jobList[0].id;
+        }
+      } catch {
+        // Ignore job list error
+      }
+    }
+    if (!targetJobId) {
+      setIsLoading(false);
+      return;
+    }
+
     try {
-      const res = await api.listObjects(jobId);
+      const res = await api.listObjects(targetJobId);
       const objects = res.objects || [];
       const dynamicCalcs = objects
         .filter((o) => o.type_name === 'metric' || o.expression_text || o.tableau_calc)
@@ -176,6 +112,8 @@ export default function LogicExplorer() {
       }
     } catch {
       // Keep existing calculations on error
+    } finally {
+      setIsLoading(false);
     }
   }, [jobId]);
 
@@ -239,21 +177,21 @@ export default function LogicExplorer() {
       {/* ── Metric Header Grid ────────────────────────────────────────── */}
       <div className={styles.kpiGrid}>
         <div className={styles.kpiCard}>
-          <span className={styles.kpiLabel}>Calculated Fields</span>
+          <span className={styles.kpiLabel}>MSTR Metrics (Measures)</span>
           <span className={styles.kpiValue}>{totalCalculations}</span>
         </div>
         <div className={styles.kpiCard}>
-          <span className={styles.kpiLabel}>Compiled to Tableau Calc</span>
+          <span className={styles.kpiLabel}>Tableau Calculated Fields (CF)</span>
           <span className={styles.kpiValue}>{validCount}</span>
         </div>
         <div className={styles.kpiCard}>
-          <span className={styles.kpiLabel}>Compilation Rate</span>
+          <span className={styles.kpiLabel}>Logic Conversion Rate</span>
           <span className={styles.kpiValue} style={{ color: 'var(--green, #22c55e)' }}>
             {compilationRate}%
           </span>
         </div>
         <div className={styles.kpiCard}>
-          <span className={styles.kpiLabel}>LOD / Ratio Formulas</span>
+          <span className={styles.kpiLabel}>LOD / Dimty Expressions</span>
           <span className={styles.kpiValue}>{lodCount}</span>
         </div>
       </div>
@@ -266,7 +204,7 @@ export default function LogicExplorer() {
             className={`${styles.tabBtn} ${activeTab === 'CARDS' ? styles.tabBtnActive : ''}`}
             onClick={() => setActiveTab('CARDS')}
           >
-            <Code2 size={15} /> MicroStrategy → Tableau Calc Cards
+            <Code2 size={15} /> MSTR Metric ➔ Tableau Calc Cards
             <span className={styles.badgeCount}>{filteredConversions.length}</span>
           </button>
           <button
@@ -284,7 +222,7 @@ export default function LogicExplorer() {
               <Search size={14} style={{ color: 'var(--ink-3)' }} />
               <input
                 type="text"
-                placeholder="Search calculated field or formula..."
+                placeholder="Search MSTR metric, formula or Tableau calc..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
               />
@@ -293,7 +231,7 @@ export default function LogicExplorer() {
               <Filter size={14} style={{ color: 'var(--ink-3)' }} />
               <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
                 <option value="ALL">All Formula Types</option>
-                <option value="LOD">LOD Expressions</option>
+                <option value="LOD">LOD / Dimty Expressions</option>
                 <option value="CONDITIONAL">Conditional (IF / CASE)</option>
                 <option value="TABLE_CALC">Table Calculations</option>
                 <option value="STANDARD">Standard Measures</option>
@@ -337,7 +275,7 @@ export default function LogicExplorer() {
                     <div className={styles.codeColumn}>
                       <div className={styles.codeColumnHeader}>
                         <span className={styles.codeColumnTitleSource}>
-                          <FileText size={13} /> MicroStrategy Formula / Expression
+                          <FileText size={13} /> MicroStrategy Metric Expression (Dimty / Formula)
                         </span>
                         <button
                           type="button"
@@ -370,7 +308,7 @@ export default function LogicExplorer() {
                     <div className={styles.codeColumn}>
                       <div className={styles.codeColumnHeader}>
                         <span className={styles.codeColumnTitleTarget}>
-                          <Code2 size={13} /> Tableau Calculated Field Formula
+                          <Code2 size={13} /> Tableau Calculated Field (CF) / LOD Expression
                         </span>
                         <button
                           type="button"
