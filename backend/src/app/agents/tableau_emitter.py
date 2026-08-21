@@ -286,30 +286,6 @@ class TableauEmitterAgent:
             if dim.hidden:
                 col.set("hidden", "true")
 
-        # Inject any physical fact table columns from IR tables that are not already dimensions
-        fact_cols = set()
-        if ir and hasattr(ir, "tables"):
-            for table in ir.tables:
-                for col_def in getattr(table, "columns", []):
-                    cname = col_def.get("name") if isinstance(col_def, dict) else getattr(col_def, "name", "")
-                    if cname and cname not in existing_cols:
-                        fact_cols.add(cname)
-
-        meas_names = {m.local_name for m in getattr(ir, "measures", [])}
-        meas_names |= {getattr(m, "caption", "") for m in getattr(ir, "measures", [])}
-        meas_names |= {getattr(m, "name", "") for m in getattr(ir, "measures", [])}
-
-        for fcol in sorted(fact_cols):
-            if fcol not in existing_cols and fcol not in meas_names:
-                etree.SubElement(ds_node, "column", attrib={
-                    "caption": xml_escape(fcol),
-                    "datatype": "real",
-                    "name": f"[{fcol}]",
-                    "role": "measure",
-                    "type": "quantitative",
-                })
-                existing_cols.add(fcol)
-
     def _inject_calculated_fields(self, ds_node, ir):
         """Inject calculated field columns (measures) in topo-sorted order."""
         sorted_measures = self._topo_sort_measures(ir.measures)
