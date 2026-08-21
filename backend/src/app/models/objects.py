@@ -142,7 +142,7 @@ class ReviewTask(Base):
 
     id = Column(String, primary_key=True, default=_uuid)
     job_id = Column(String, ForeignKey("jobs.id"), nullable=False)
-    object_id = Column(String, ForeignKey("objects.id"), nullable=False)
+    object_id = Column(String, ForeignKey("objects.id"), nullable=True)
 
     severity = Column(String, nullable=False)
     reason = Column(String, nullable=False)

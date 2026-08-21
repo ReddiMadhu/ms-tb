@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -29,6 +30,28 @@ from app.models.job import Job
 from app.models.objects import MigrationObject, ReviewTask
 
 logger = logging.getLogger(__name__)
+
+
+class TableauMetricTranslation(BaseModel):
+    """Structured response schema for MicroStrategy to Tableau calculation translation."""
+
+    tableau_calc: str = Field(
+        description="The exact Tableau calculated field formula using valid Tableau Desktop syntax (e.g. 'SUM([Sales])', '{ FIXED [Region] : AVG([Profit]) }')"
+    )
+    explanation: str = Field(
+        default="LLM translated calculation",
+        description="Concise 1-2 sentence explanation of the translation logic and level-of-detail mapping."
+    )
+    confidence: float = Field(
+        default=0.90,
+        ge=0.0,
+        le=1.0,
+        description="Confidence score between 0.0 and 1.0 reflecting syntax certainty."
+    )
+    requires_human_review: bool = Field(
+        default=False,
+        description="Set to true if the formula contains unsupported MicroStrategy functions, ambiguous joins, or requires domain review; otherwise false."
+    )
 
 
 @dataclass
@@ -317,11 +340,38 @@ Rules:
 - Use FIXED/INCLUDE/EXCLUDE LOD expressions where dimensionality indicates
 - Handle null with ZN() if needed
 - Handle zero division with IIF(denominator = 0, NULL, ...)
-- Do NOT use RAWSQL or custom SQL
+- Do NOT use RAWSQL or custom SQL"""
+
+            # 1. Prefer structured output (Pydantic schema enforcement)
+            if hasattr(self.llm, "with_structured_output"):
+                try:
+                    structured_llm = self.llm.with_structured_output(TableauMetricTranslation)
+                    res = structured_llm.invoke(prompt)
+                    if isinstance(res, TableauMetricTranslation):
+                        calc_val = res.tableau_calc.strip()
+                        return LLMTranslationResult(
+                            tableau_calc=calc_val,
+                            explanation=res.explanation,
+                            confidence=float(res.confidence),
+                            requires_human_review=bool(res.requires_human_review),
+                        )
+                    elif isinstance(res, dict):
+                        calc_val = str(res.get("tableau_calc", "")).strip()
+                        return LLMTranslationResult(
+                            tableau_calc=calc_val,
+                            explanation=str(res.get("explanation", "LLM translated")),
+                            confidence=float(res.get("confidence", 0.90)),
+                            requires_human_review=bool(res.get("requires_human_review", False)),
+                        )
+                except Exception as struct_err:
+                    logger.debug("Structured output invoke fallback: %s", struct_err)
+
+            # 2. Fallback to standard prompt invoke + JSON extraction
+            full_prompt = f"""{prompt}
 - Output ONLY valid JSON in format:
 {{"tableau_calc": "...", "explanation": "...", "confidence": 0.0-1.0, "requires_human_review": true/false}}"""
 
-            response = self.llm.invoke(prompt)
+            response = self.llm.invoke(full_prompt)
 
             # Extract content from LangChain AIMessage or CachedAIMessage
             content = response.content if hasattr(response, "content") else str(response)
@@ -344,8 +394,11 @@ Rules:
             if not parsed:
                 parsed = json.loads(content)
 
+            # Validate via Pydantic model for strict type coercion
+            validated = TableauMetricTranslation.model_validate(parsed)
+            calc_val = validated.tableau_calc.strip()
+
             # Validate with sqlglot if possible
-            calc_val = parsed.get("tableau_calc", "").strip()
             try:
                 import sqlglot
                 sqlglot.parse(calc_val)
@@ -354,9 +407,9 @@ Rules:
 
             return LLMTranslationResult(
                 tableau_calc=calc_val,
-                explanation=parsed.get("explanation", "LLM translated"),
-                confidence=float(parsed.get("confidence", 0.90)),
-                requires_human_review=parsed.get("requires_human_review", False),
+                explanation=validated.explanation,
+                confidence=float(validated.confidence),
+                requires_human_review=bool(validated.requires_human_review),
             )
 
         except Exception as e:
@@ -370,10 +423,15 @@ Rules:
 
     def _create_review_task(self, measure, result: LLMTranslationResult):
         """Create a review task for human review of AI-translated expression."""
+        obj = self.db.query(MigrationObject).filter(
+            MigrationObject.job_id == self.job.id,
+            MigrationObject.mstr_id == measure.mstr_id,
+        ).first() if self.db else None
+
         task = ReviewTask(
             id=str(uuid.uuid4()),
             job_id=self.job.id,
-            object_id=measure.mstr_id,
+            object_id=obj.id if obj else None,
             severity="warning" if result.confidence >= 0.50 else "blocker",
             reason=f"AI-translated with confidence {result.confidence:.2f}: {result.explanation}",
             mstr_expression=measure.expression_text,

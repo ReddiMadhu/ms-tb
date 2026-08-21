@@ -366,12 +366,16 @@ class PipelineOrchestrator:
                                 try:
                                     v_detail = sync_session.get_visualization_definition(dossier_id, d_iid, ch_key, vz_key)
                                     res = v_detail.get("result", {}).get("definition", {})
-                                    v_metrics = [m.get("name") for m in res.get("metrics", [])]
-                                    v_attrs = [a.get("name") for a in res.get("attributes", [])]
+                                    v_metrics = [m.get("name") for m in res.get("metrics", []) if m.get("name")]
+                                    v_attrs = [a.get("name") for a in res.get("attributes", []) if a.get("name")]
+                                    v_metric_ids = [m.get("id") for m in res.get("metrics", []) if m.get("id")]
+                                    v_attr_ids = [a.get("id") for a in res.get("attributes", []) if a.get("id")]
                                     num_format = res.get("metrics", [{}])[0].get("numberFormatting", {}) if res.get("metrics") else {}
                                     viz_meta_map[vz_key] = {
                                         "metrics": v_metrics,
                                         "attributes": v_attrs,
+                                        "metric_ids": v_metric_ids,
+                                        "attribute_ids": v_attr_ids,
                                         "number_formatting": num_format,
                                     }
                                 except Exception:
@@ -382,6 +386,15 @@ class PipelineOrchestrator:
             logger.info("Harvested ground-truth metadata for %d visuals from MSTR", len(viz_meta_map))
         except Exception as e:
             logger.warning("Could not harvest visual metadata from MSTR: %s", e)
+
+        # Build canonical ID lookup map from compiled IR for ground-truth resolution
+        mstr_id_to_canonical = {}
+        for m in ir.measures:
+            if getattr(m, "mstr_id", None):
+                mstr_id_to_canonical[m.mstr_id] = m.local_name
+        for d in ir.dimensions:
+            if getattr(d, "mstr_id", None):
+                mstr_id_to_canonical[d.mstr_id] = d.local_name
 
         for dossier_obj in dossier_objs:
             defn = dossier_obj.mstr_definition
@@ -417,7 +430,8 @@ class PipelineOrchestrator:
                                     elements = sel.get("elements", [])
                                     for elem in elements:
                                         if isinstance(elem, dict):
-                                            elem_name = elem.get("name", "")
+                                            elem_id = elem.get("id", "")
+                                            elem_name = mstr_id_to_canonical.get(elem_id) or elem.get("name", "")
                                             if elem_name:
                                                 if shelf in ("rows", "row"):
                                                     rows.append(elem_name)
@@ -429,9 +443,22 @@ class PipelineOrchestrator:
                                                     size_field = elem_name
 
                         v_meta = viz_meta_map.get(viz_key, {})
-                        v_metrics = v_meta.get("metrics", [])
-                        v_attrs = v_meta.get("attributes", [])
+                        v_metrics_raw = v_meta.get("metrics", [])
+                        v_attrs_raw = v_meta.get("attributes", [])
+                        v_metric_ids = v_meta.get("metric_ids", [])
+                        v_attr_ids = v_meta.get("attribute_ids", [])
                         v_format = v_meta.get("number_formatting", {})
+
+                        # Canonicalize metrics/attributes using MSTR GUIDs
+                        v_metrics = []
+                        for i, mname in enumerate(v_metrics_raw):
+                            mid = v_metric_ids[i] if i < len(v_metric_ids) else None
+                            v_metrics.append(mstr_id_to_canonical.get(mid) or mname)
+
+                        v_attrs = []
+                        for i, aname in enumerate(v_attrs_raw):
+                            aid = v_attr_ids[i] if i < len(v_attr_ids) else None
+                            v_attrs.append(mstr_id_to_canonical.get(aid) or aname)
 
                         # If rows/columns were not in selector, map directly from ground-truth instance definition
                         if not rows and not columns:
@@ -496,6 +523,8 @@ class PipelineOrchestrator:
                             viz_key=viz_key,
                             mstr_metrics=v_metrics,
                             mstr_attributes=v_attrs,
+                            metric_ids=v_metric_ids,
+                            attribute_ids=v_attr_ids,
                             number_formatting=v_format,
                         )
                         ir.visuals.append(ir_visual)
@@ -554,6 +583,10 @@ class PipelineOrchestrator:
 
             logger.info("AI translation stage completed successfully")
         except Exception as e:
+            try:
+                db.rollback()
+            except Exception:
+                pass
             logger.warning("AI translation failed (non-fatal): %s", e)
 
     async def _run_viz(self, db: Session, job: Job):

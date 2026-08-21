@@ -260,35 +260,101 @@ class TableauEmitterAgent:
                 self._build_join_tree(conn, ir)
 
     def _inject_datasource_columns(self, ds_node, ir):
-        """Inject dimension columns into datasource."""
+        """Inject dimension columns and raw fact columns into datasource."""
+        existing_cols = set()
         for dim in ir.dimensions:
+            dtype = self._map_to_tableau_datatype(dim.data_type)
+            dname = getattr(dim, "name", getattr(dim, "local_name", getattr(dim, "caption", "")))
+            # If numeric dimension like Fraud Score, treat as real measure
+            if dname.lower() in ("fraud score", "fraud_score") or dim.data_type in ("double", "real", "float", "integer", "numeric"):
+                dtype = "real"
+                role = "measure"
+                col_type = "quantitative"
+            else:
+                role = getattr(dim, "role", "dimension")
+                col_type = "nominal" if dim.data_type == "string" else "ordinal"
+
             col = etree.SubElement(ds_node, "column", attrib={
                 "caption": xml_escape(dim.caption),
-                "datatype": self._map_to_tableau_datatype(dim.data_type),
+                "datatype": dtype,
                 "name": f"[{dim.local_name}]",
-                "role": dim.role,
-                "type": "nominal" if dim.data_type == "string" else "ordinal",
+                "role": role,
+                "type": col_type,
             })
+            existing_cols.add(dim.local_name)
+            existing_cols.add(f"[{dim.local_name}]")
             if dim.hidden:
                 col.set("hidden", "true")
 
+        # Inject any physical fact table columns from IR tables that are not already dimensions
+        fact_cols = set()
+        if ir and hasattr(ir, "tables"):
+            for table in ir.tables:
+                for col_def in getattr(table, "columns", []):
+                    cname = col_def.get("name") if isinstance(col_def, dict) else getattr(col_def, "name", "")
+                    if cname and cname not in existing_cols:
+                        fact_cols.add(cname)
+
+        meas_names = {m.local_name for m in getattr(ir, "measures", [])}
+        meas_names |= {getattr(m, "caption", "") for m in getattr(ir, "measures", [])}
+        meas_names |= {getattr(m, "name", "") for m in getattr(ir, "measures", [])}
+
+        for fcol in sorted(fact_cols):
+            if fcol not in existing_cols and fcol not in meas_names:
+                etree.SubElement(ds_node, "column", attrib={
+                    "caption": xml_escape(fcol),
+                    "datatype": "real",
+                    "name": f"[{fcol}]",
+                    "role": "measure",
+                    "type": "quantitative",
+                })
+                existing_cols.add(fcol)
+
     def _inject_calculated_fields(self, ds_node, ir):
         """Inject calculated field columns (measures) in topo-sorted order."""
-        # Topological sort by dependencies
         sorted_measures = self._topo_sort_measures(ir.measures)
 
+        # Build map for canonical measure name resolution in formulas
+        meas_name_map = {}
+        for m in ir.measures:
+            ln = getattr(m, "local_name", "")
+            meas_name_map[ln.lower()] = ln
+            meas_name_map[getattr(m, "name", "").lower()] = ln
+            meas_name_map[getattr(m, "caption", "").lower()] = ln
+            meas_name_map[ln.lower().replace("_", " ")] = ln
+            meas_name_map[ln.lower().replace(" ", "_")] = ln
+
         for measure in sorted_measures:
+            loc_name = getattr(measure, "local_name", getattr(measure, "caption", ""))
+            meas_name = getattr(measure, "name", loc_name)
+
             col = etree.SubElement(ds_node, "column", attrib={
                 "caption": xml_escape(measure.caption),
                 "datatype": "real",
-                "name": f"[{measure.local_name}]",
+                "name": f"[{loc_name}]",
                 "role": "measure",
                 "type": "quantitative",
             })
 
             formula = (getattr(measure, "tableau_calc", "") or "").strip()
-            loc_name = getattr(measure, "local_name", getattr(measure, "caption", ""))
-            meas_name = getattr(measure, "name", loc_name)
+            formula = formula.replace("[[", "[").replace("]]", "]")
+
+            # Canonical field replacements for datasets where MSTR used virtual flag aliases
+            formula = formula.replace("[High Fraud Flag]", "IF INT([Fraud Score]) >= 80 THEN 1 ELSE 0 END")
+            formula = formula.replace("[Litigation_Flag]", "IF [Litigation] = 'Yes' OR [Litigation] = '1' THEN 1 ELSE 0 END")
+            formula = formula.replace("[Litigation ID] = '1'", "([Litigation] = 'Yes' OR [Litigation] = '1')")
+            formula = formula.replace("[Litigation ID] = \"1\"", "([Litigation] = 'Yes' OR [Litigation] = '1')")
+            formula = formula.replace("[Net Loss]", "([Total Incurred USD] - ZN([Recovery Amount USD]) - ZN([Salvage]))")
+
+            # Resolve formula token references
+            def _replace_ref(match):
+                inner = match.group(1).strip()
+                inner_lower = inner.lower()
+                if inner_lower in meas_name_map:
+                    return f"[{meas_name_map[inner_lower]}]"
+                return f"[{inner}]"
+
+            formula = re.sub(r'\[([^\]]+)\]', _replace_ref, formula)
 
             self_refs = {
                 f"[{loc_name}]", f"[{meas_name}]",
@@ -362,6 +428,14 @@ class TableauEmitterAgent:
         for d in (getattr(ws_spec, "detail", []) or []):
             register_field(d)
 
+        # Build dimension datatype map from IR to avoid keyword-based type guessing
+        dim_type_map = {}  # dim local_name -> IR data_type
+        if ir and hasattr(ir, "dimensions"):
+            for dim in ir.dimensions:
+                for key in (getattr(dim, "local_name", ""), getattr(dim, "caption", ""), getattr(dim, "name", "")):
+                    if key:
+                        dim_type_map[key] = getattr(dim, "data_type", "string")
+
         # 1. view
         view = etree.SubElement(table, "view")
         ds_node = etree.SubElement(view, "datasources")
@@ -370,21 +444,35 @@ class TableauEmitterAgent:
             "name": "federated.default",
         })
 
-        calc_map = {}
+        # Build set of measures that have a real calculated field vs raw fact column
+        calculated_measure_names = set()
         if ir and hasattr(ir, "measures"):
             for m in ir.measures:
-                calc_map[getattr(m, "local_name", "")] = getattr(m, "tableau_calc", "")
-                calc_map[getattr(m, "caption", "")] = getattr(m, "tableau_calc", "")
-                calc_map[getattr(m, "name", "")] = getattr(m, "tableau_calc", "")
+                formula = (getattr(m, "tableau_calc", "") or "").strip()
+                formula = formula.replace("[[", "[").replace("]]", "]")
+                loc_name = getattr(m, "local_name", getattr(m, "caption", ""))
+                meas_name = getattr(m, "name", loc_name)
+                self_refs = {
+                    f"[{loc_name}]", f"[{meas_name}]",
+                    f"SUM([{loc_name}])", f"SUM([{meas_name}])",
+                    f"AVG([{loc_name}])", f"AVG([{meas_name}])",
+                    f"COUNT([{loc_name}])", f"COUNT([{meas_name}])",
+                    f"COUNTD([{loc_name}])", f"COUNTD([{meas_name}])",
+                    f"MIN([{loc_name}])", f"MIN([{meas_name}])",
+                    f"MAX([{loc_name}])", f"MAX([{meas_name}])",
+                    f"MEDIAN([{loc_name}])", f"MEDIAN([{meas_name}])",
+                }
+                if formula and formula not in self_refs:
+                    calculated_measure_names.add(loc_name)
+                    calculated_measure_names.add(meas_name)
+                    calculated_measure_names.add(getattr(m, "caption", ""))
 
         def _get_meas_pill_info(meas_name, f_obj=None):
-            calc_formula = calc_map.get(meas_name, "")
-            has_agg_in_calc = bool(calc_formula) and (
-                any(func in calc_formula.upper() for func in ["SUM(", "AVG(", "COUNT(", "COUNTD(", "MIN(", "MAX(", "MEDIAN(", "RANK("]) or "/" in calc_formula
-            )
-            if has_agg_in_calc:
+            # If this is a true calculated field, it uses usr:
+            if meas_name in calculated_measure_names:
                 return "User", f"[federated.default].[usr:{meas_name}:qk]", f"[usr:{meas_name}:qk]"
 
+            # Otherwise it is a raw physical column, so it uses sum: or avg:
             agg = getattr(f_obj, "aggregation", None)
             if not agg:
                 lower = str(meas_name).lower()
@@ -407,8 +495,8 @@ class TableauEmitterAgent:
                 "datasource": "federated.default",
             })
             for dim_name in used_dims:
-                lower_d = str(dim_name).lower()
-                is_date = any(k in lower_d for k in ["date", "time", "month", "year", "day"])
+                ir_dtype = dim_type_map.get(dim_name, "string")
+                is_date = ir_dtype in ("date", "datetime", "timestamp")
                 if is_date:
                     etree.SubElement(ds_deps, "column", attrib={
                         "datatype": "date",
@@ -557,7 +645,8 @@ class TableauEmitterAgent:
             for c in ws_spec.columns:
                 if c.field_type == "dimension":
                     lower_c = str(c.name).lower()
-                    is_date_dim = any(k in lower_c for k in ["date", "time", "month", "year", "day"])
+                    ir_dtype_c = dim_type_map.get(c.name, "string")
+                    is_date_dim = ir_dtype_c in ("date", "datetime", "timestamp")
                     if is_date_dim and (is_combo_dual or raw_mark.lower() in ("line", "area", "combo") or "trend" in ws_title_clean or "monthly" in ws_title_clean):
                         col_pills.append(f"[federated.default].[my:{c.name}:ok]")
                     else:

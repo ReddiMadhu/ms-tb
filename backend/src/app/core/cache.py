@@ -51,18 +51,51 @@ class CachedStructuredRunnable:
 
         if structured_hash in self.cache_llm.cache:
             cached_data = self.cache_llm.cache[structured_hash]
-            if self.schema and hasattr(self.schema, "parse_obj"):
-                return self.schema.parse_obj(cached_data)
-            elif self.schema and hasattr(self.schema, "model_validate"):
+            if self.schema and hasattr(self.schema, "model_validate"):
                 return self.schema.model_validate(cached_data)
+            elif self.schema and hasattr(self.schema, "parse_obj"):
+                return self.schema.parse_obj(cached_data)
             return cached_data
+
+        # Fallback: check if legacy unstructured text was cached for this prompt
+        if prompt_hash in self.cache_llm.cache:
+            legacy_text = self.cache_llm.cache[prompt_hash]
+            if isinstance(legacy_text, str):
+                import re
+                parsed = None
+                json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', legacy_text, re.DOTALL)
+                if json_match:
+                    try:
+                        parsed = json.loads(json_match.group(1))
+                    except Exception:
+                        pass
+                if not parsed:
+                    json_match = re.search(r'\{.*\}', legacy_text, re.DOTALL)
+                    if json_match:
+                        try:
+                            parsed = json.loads(json_match.group(0))
+                        except Exception:
+                            pass
+                if parsed and self.schema:
+                    try:
+                        if hasattr(self.schema, "model_validate"):
+                            obj = self.schema.model_validate(parsed)
+                        elif hasattr(self.schema, "parse_obj"):
+                            obj = self.schema.parse_obj(parsed)
+                        else:
+                            obj = parsed
+                        self.cache_llm.cache[structured_hash] = obj.model_dump() if hasattr(obj, "model_dump") else parsed
+                        self.cache_llm._save_cache()
+                        return obj
+                    except Exception:
+                        pass
 
         response = self.base_runnable.invoke(input_data)
         if response:
-            if hasattr(response, "dict"):
-                serialized = response.dict()
-            elif hasattr(response, "model_dump"):
+            if hasattr(response, "model_dump"):
                 serialized = response.model_dump()
+            elif hasattr(response, "dict"):
+                serialized = response.dict()
             else:
                 serialized = response
             self.cache_llm.cache[structured_hash] = serialized

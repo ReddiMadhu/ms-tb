@@ -122,6 +122,8 @@ class VisualizationAgent:
     def __init__(self, ir):
         self.ir = ir
         self._used_kpi_measures = set()
+        # Build canonical field name index for resolution
+        self._field_index = self._build_field_index(ir)
 
     def plan(self) -> VizPlan:
         """Generate VizPlan from IR visuals."""
@@ -151,6 +153,8 @@ class VisualizationAgent:
             visual.name = unique_name
             ws = self._plan_worksheet(visual)
             ws.name = unique_name
+            # Resolve all field names against IR inventory to prevent phantom refs
+            self._resolve_all_field_refs(ws)
             result.worksheets.append(ws)
 
         # If no visuals, create default worksheets from measures
@@ -198,6 +202,109 @@ class VisualizationAgent:
         )
         return result
 
+    # ── Field name resolution ────────────────────────────────────
+
+    @staticmethod
+    def _build_field_index(ir) -> dict[str, str]:
+        """
+        Build a canonical index mapping lowercased/normalized field names
+        and MSTR IDs to the actual IR local_name. This covers name, local_name,
+        caption, and mstr_id for both dimensions and measures.
+        """
+        index: dict[str, str] = {}  # normalized_key -> canonical local_name
+        for dim in getattr(ir, "dimensions", []):
+            canonical = getattr(dim, "local_name", "") or getattr(dim, "name", "")
+            if not canonical:
+                continue
+            for variant in (getattr(dim, "name", ""), getattr(dim, "local_name", ""), getattr(dim, "caption", ""), getattr(dim, "mstr_id", "")):
+                if variant:
+                    index[str(variant).lower().strip()] = canonical
+        for meas in getattr(ir, "measures", []):
+            canonical = getattr(meas, "local_name", "") or getattr(meas, "name", "")
+            if not canonical:
+                continue
+            for variant in (getattr(meas, "name", ""), getattr(meas, "local_name", ""), getattr(meas, "caption", ""), getattr(meas, "mstr_id", "")):
+                if variant:
+                    index[str(variant).lower().strip()] = canonical
+        return index
+
+    def _resolve_field_name(self, name: str) -> str:
+        """
+        Resolve a field name against the IR inventory.
+
+        1. Exact match (case-insensitive or MSTR ID)
+        2. Fuzzy token-overlap match
+        3. Substring containment match
+        4. Falls back to original name if no match found
+        """
+        if not name:
+            return name
+
+        key = name.lower().strip()
+
+        # 1. Exact match (name, caption, local_name, or MSTR GUID)
+        if key in self._field_index:
+            resolved = self._field_index[key]
+            if resolved != name:
+                logger.info("Field resolution: '%s' -> '%s' (exact)", name, resolved)
+            return resolved
+
+        # 2. Fuzzy token-overlap match
+        name_tokens = set(re.findall(r"\w+", key))
+        if not name_tokens:
+            return name
+
+        best_canonical = None
+        best_score = 0
+        best_key = ""
+
+        for idx_key, canonical in self._field_index.items():
+            idx_tokens = set(re.findall(r"\w+", idx_key))
+            overlap = len(name_tokens & idx_tokens)
+            union = len(name_tokens | idx_tokens)
+            score = overlap / union if union else 0
+            if overlap >= 1 and score > best_score:
+                best_score = score
+                best_canonical = canonical
+                best_key = idx_key
+
+        if best_canonical and best_score >= 0.3:
+            logger.info(
+                "Field resolution: '%s' -> '%s' (fuzzy, score=%.2f, matched='%s')",
+                name, best_canonical, best_score, best_key,
+            )
+            return best_canonical
+
+        # 3. Substring containment
+        for idx_key, canonical in self._field_index.items():
+            if (len(key) >= 4 and key in idx_key) or (len(idx_key) >= 4 and idx_key in key):
+                logger.info(
+                    "Field resolution: '%s' -> '%s' (substring, matched='%s')",
+                    name, canonical, idx_key,
+                )
+                return canonical
+
+        logger.warning("Field resolution: '%s' has no IR match — keeping as-is", name)
+        return name
+
+    def _resolve_all_field_refs(self, ws: WorksheetSpec):
+        """
+        Validate and resolve all FieldRef names in a WorksheetSpec
+        against the IR field inventory.
+        """
+        for ref in (ws.rows or []):
+            ref.name = self._resolve_field_name(ref.name)
+        for ref in (ws.columns or []):
+            ref.name = self._resolve_field_name(ref.name)
+        if ws.color:
+            ws.color.name = self._resolve_field_name(ws.color.name)
+        if ws.size:
+            ws.size.name = self._resolve_field_name(ws.size.name)
+        if ws.label:
+            ws.label.name = self._resolve_field_name(ws.label.name)
+        for ref in (ws.detail or []):
+            ref.name = self._resolve_field_name(ref.name)
+
     def _plan_worksheet(self, visual) -> WorksheetSpec:
         """Plan a single worksheet from an IR visual."""
         raw_type = (getattr(visual, "mark_type", "unknown") or "unknown").lower().replace("-", "_").replace(" ", "_")
@@ -219,11 +326,21 @@ class VisualizationAgent:
             ir_meas_names.add((getattr(m, "name", "") or "").lower())
         ir_meas_names.discard("")
 
+        ir_dim_names = set()
+        for d in getattr(self.ir, "dimensions", []):
+            ir_dim_names.add((getattr(d, "local_name", "") or "").lower())
+            ir_dim_names.add((getattr(d, "caption", "") or "").lower())
+            ir_dim_names.add((getattr(d, "name", "") or "").lower())
+        ir_dim_names.discard("")
+
         def is_measure_field(fname: str) -> bool:
             fl = str(fname).lower().strip()
+            if fl in ir_dim_names:
+                return False
             if fl in ir_meas_names:
                 return True
-            return any(k in fl for k in ["count", "avg", "average", "sum", "usd", "amount", "rate", "ratio", "score", "days", "loss", "reserve", "recovery", "salvage", "subrogation", "exposure", "severity"])
+            # Fallback only for non-IR fields
+            return any(k in fl for k in ["count", "avg", "average", "sum", "usd", "amount", "rate", "ratio", "severity"])
 
         # Map fields to shelves based on explicit visual definitions if present
         vis_rows = getattr(visual, "rows", []) or []
@@ -253,8 +370,10 @@ class VisualizationAgent:
 
             v_metrics = getattr(visual, "mstr_metrics", None)
             v_attrs = getattr(visual, "mstr_attributes", None)
-            matched_measure = self._match_measure_for_visual(vis_clean, measures, mstr_metrics=v_metrics)
-            matched_dim = self._match_dimension_for_visual(vis_clean, dims, mstr_attributes=v_attrs)
+            v_metric_ids = getattr(visual, "metric_ids", None)
+            v_attr_ids = getattr(visual, "attribute_ids", None)
+            matched_measure = self._match_measure_for_visual(vis_clean, measures, mstr_metrics=v_metrics, metric_ids=v_metric_ids)
+            matched_dim = self._match_dimension_for_visual(vis_clean, dims, mstr_attributes=v_attrs, attribute_ids=v_attr_ids)
 
             # Date/Time dimension preference for trends/times
             date_dim = next(
@@ -420,12 +539,28 @@ class VisualizationAgent:
             filters=filters,
         )
 
-    def _match_measure_for_visual(self, vis_clean: str, measures: list, mstr_metrics: Optional[list[str]] = None) -> Optional[Any]:
-        """Find the measure that best matches keywords in the visual title or MSTR ground-truth metrics."""
+    def _match_measure_for_visual(
+        self,
+        vis_clean: str,
+        measures: list,
+        mstr_metrics: Optional[list[str]] = None,
+        metric_ids: Optional[list[str]] = None,
+    ) -> Optional[Any]:
+        """Find the measure that best matches MSTR metric IDs, MSTR metrics, or keywords in visual title."""
         if not measures:
             return None
 
-        # Priority 0: MicroStrategy ground-truth metrics from visualization instance definition
+        # Priority 0: Exact MicroStrategy Metric GUID match (100% deterministic ground truth from MSTR API)
+        if metric_ids:
+            for mid in metric_ids:
+                if not mid:
+                    continue
+                for m in measures:
+                    if getattr(m, "mstr_id", "") == mid:
+                        self._used_kpi_measures.add(getattr(m, "mstr_id", getattr(m, "name", "")))
+                        return m
+
+        # Priority 1: MicroStrategy ground-truth metrics from visualization instance definition
         if mstr_metrics:
             for target_m in mstr_metrics:
                 if not target_m:
@@ -435,7 +570,8 @@ class VisualizationAgent:
                 for m in measures:
                     m_name = (getattr(m, "name", "") or "").lower()
                     m_cap = (getattr(m, "caption", "") or "").lower()
-                    if target_clean in m_name or target_clean in m_cap or m_name in target_clean or m_cap in target_clean:
+                    m_local = (getattr(m, "local_name", "") or "").lower()
+                    if target_clean in m_name or target_clean in m_cap or target_clean in m_local or m_name in target_clean or m_cap in target_clean or m_local in target_clean:
                         self._used_kpi_measures.add(getattr(m, "mstr_id", getattr(m, "name", "")))
                         return m
                 # Specialized semantic keyword mapping
@@ -552,12 +688,26 @@ class VisualizationAgent:
         return measures[0]
 
     @staticmethod
-    def _match_dimension_for_visual(vis_clean: str, dims: list, mstr_attributes: Optional[list[str]] = None) -> Optional[Any]:
-        """Find the dimension that best matches keywords in the visual title or MSTR ground-truth attributes."""
+    def _match_dimension_for_visual(
+        vis_clean: str,
+        dims: list,
+        mstr_attributes: Optional[list[str]] = None,
+        attribute_ids: Optional[list[str]] = None,
+    ) -> Optional[Any]:
+        """Find the dimension that best matches MSTR attribute IDs, MSTR attributes, or keywords in visual title."""
         if not dims:
             return None
 
-        # Priority 0: Ground-truth attributes from MSTR
+        # Priority 0: Exact MicroStrategy Attribute GUID match (100% deterministic ground truth from MSTR API)
+        if attribute_ids:
+            for aid in attribute_ids:
+                if not aid:
+                    continue
+                for d in dims:
+                    if getattr(d, "mstr_id", "") == aid:
+                        return d
+
+        # Priority 1: Ground-truth attributes from MSTR
         if mstr_attributes:
             for target_a in mstr_attributes:
                 if not target_a:
@@ -566,7 +716,8 @@ class VisualizationAgent:
                 for d in dims:
                     d_name = (getattr(d, "name", "") or "").lower()
                     d_cap = (getattr(d, "caption", "") or "").lower()
-                    if target_clean in d_name or target_clean in d_cap or d_name in target_clean or d_cap in target_clean:
+                    d_local = (getattr(d, "local_name", "") or "").lower()
+                    if target_clean in d_name or target_clean in d_cap or target_clean in d_local or d_name in target_clean or d_cap in target_clean or d_local in target_clean:
                         return d
 
         vis_words = set(re.findall(r"\w+", vis_clean))

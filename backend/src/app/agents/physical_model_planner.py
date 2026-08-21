@@ -17,6 +17,8 @@ Responsibilities:
 import hashlib
 import json
 import logging
+import os
+import re
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Optional
@@ -220,6 +222,94 @@ class PhysicalModelPlanner:
                     source_type="fact_expression",
                     source_id=fact.mstr_id,
                 ))
+
+            # When no explicit facts exist (dossier-only migrations),
+            # synthesize fact columns from IR measure formulas so the hyper
+            # extract includes the value columns that calculated fields need.
+            #
+            # Strategy: Extract ALL [ColumnRef] from every IR measure's
+            # tableau_calc formula. Any ref that is NOT a dimension becomes
+            # a DOUBLE column in FACT_MAIN, because Tableau needs it as a
+            # physical column to evaluate SUM/AVG/COUNT on it.
+            if not semantic_bundle.facts:
+                dim_names = {d.name.lower() for d in semantic_bundle.dimensions}
+                dim_names |= {(getattr(d, "local_name", "") or "").lower() for d in semantic_bundle.dimensions}
+                existing_fact_cols = {c.column_name for c in fact_columns}
+
+                # Collect IR measures with their tableau_calc formulas
+                ir_measures = []
+                ir_path = os.path.join(
+                    self.job.artifacts_dir or f"./artifacts/{self.job.id}",
+                    "ir.json",
+                )
+                if os.path.exists(ir_path):
+                    import json as _json
+                    ir_data = _json.load(open(ir_path))
+                    ir_measures = ir_data.get("measures", [])
+
+                # Build set of all measure names (lowercase) for reference
+                meas_names_lower = {m.get("local_name", "").lower() for m in ir_measures}
+                meas_names_lower |= {m.name.lower() for m in semantic_bundle.measures}
+
+                # Build a map: measure_name -> tableau_calc for self-ref detection
+                meas_calc_map = {}
+                for m in ir_measures:
+                    ln = m.get("local_name", "")
+                    tc = m.get("tableau_calc", "")
+                    if ln and tc:
+                        meas_calc_map[ln] = tc
+
+                # Pass 1: Extract all [ColumnRef] from all measure formulas
+                all_col_refs = set()
+                for m in ir_measures:
+                    tc = m.get("tableau_calc", "")
+                    if tc:
+                        refs = re.findall(r'\[([^\]]+)\]', tc)
+                        all_col_refs.update(r.strip() for r in refs)
+
+                # Also extract from semantic_bundle expression_text
+                for measure in semantic_bundle.measures:
+                    formula = getattr(measure, "precomputed_calc", "") or getattr(measure, "expression_text", "") or ""
+                    refs = re.findall(r'\[([^\]]+)\]', formula)
+                    all_col_refs.update(r.strip() for r in refs)
+
+                # Pass 2: Determine which refs need to be physical columns
+                for ref in sorted(all_col_refs):
+                    ref_lower = ref.lower().strip()
+                    # Skip dimension refs (they have their own DIM tables)
+                    if ref_lower in dim_names:
+                        continue
+                    col_name = self._normalize_identifier(ref)
+                    if col_name in existing_fact_cols:
+                        continue
+
+                    # A ref is a physical column if:
+                    # a) It's NOT a known measure name -> it's a raw fact column
+                    # b) It IS a measure name but that measure's formula is
+                    #    self-referencing (e.g., Subrogation -> SUM([Subrogation]))
+                    #    meaning it's really a raw data column
+                    is_raw = ref_lower not in meas_names_lower
+                    is_self_ref = False
+                    if not is_raw and ref in meas_calc_map:
+                        tc = meas_calc_map[ref]
+                        # Self-ref: formula is AGG([SameName]) pattern
+                        inner_refs = re.findall(r'\[([^\]]+)\]', tc)
+                        if any(ir_ref.strip() == ref for ir_ref in inner_refs):
+                            is_self_ref = True
+
+                    if is_raw or is_self_ref:
+                        fact_columns.append(PhysicalColumnDef(
+                            column_name=col_name,
+                            data_type="DOUBLE",
+                            source_type="fact_expression",
+                            source_id="",
+                        ))
+                        existing_fact_cols.add(col_name)
+                        reason = "self-ref base measure" if is_self_ref else "raw fact column"
+                        logger.info(
+                            "Synthesized fact column '%s' (%s) from formula refs",
+                            col_name, reason,
+                        )
 
             # Add FK columns for grain from dimensions
             for dim in semantic_bundle.dimensions:
