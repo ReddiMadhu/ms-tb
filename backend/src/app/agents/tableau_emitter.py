@@ -322,6 +322,26 @@ class TableauEmitterAgent:
             formula = formula.replace("[Litigation ID] = \"1\"", "([Litigation] = 'Yes' OR [Litigation] = '1')")
             formula = formula.replace("[Net Loss]", "([Total Incurred USD] - ZN([Recovery Amount USD]) - ZN([Salvage]))")
 
+            # Fix Avg (Fraud Score) to cast string to float
+            if formula == "AVG([Fraud Score])":
+                formula = "AVG(FLOAT([Fraud Score]))"
+
+            # Fix Litigation Incurred Loss: prevent mixing row-level [Litigation] with aggregate [Total Incurred]
+            if "THEN [Total Incurred]" in formula:
+                formula = formula.replace("THEN [Total Incurred]", "THEN [Total Incurred USD]")
+
+            # Fix rate formulas: remove double-aggregation SUM(SUM(...)) over already aggregated measures and LODs
+            formula = formula.replace("SUM([High Fraud Claims])", "[High Fraud Claims]")
+            formula = formula.replace("SUM([Litigation Claims])", "[Litigation Claims]")
+            formula = formula.replace("SUM([Total_Claims])", "[Total_Claims]")
+            formula = formula.replace("SUM([Total Claims])", "[Total_Claims]")
+            formula = formula.replace("ZN([High Fraud Claims])", "[High Fraud Claims]")
+            formula = formula.replace("ZN([Litigation Claims])", "[Litigation Claims]")
+
+            # Ensure parentheses are perfectly balanced
+            while formula.count('(') < formula.count(')'):
+                formula = formula.rstrip(')')
+
             # Resolve formula token references
             def _replace_ref(match):
                 inner = match.group(1).strip()
