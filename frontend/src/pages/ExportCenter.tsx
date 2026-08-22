@@ -21,13 +21,7 @@ export default function ExportCenter() {
   const [artifacts, setArtifacts] = useState<ArtifactItem[]>([]);
   const [activeTab, setActiveTab] = useState<'ARTIFACTS' | 'XML_PREVIEW'>('ARTIFACTS');
   const [copiedXml, setCopiedXml] = useState(false);
-  const [tdsXml, setTdsXml] = useState<string>(`<?xml version='1.0' encoding='utf-8' ?>
-<datasource formatted-name='Migrated_DS' inline='true' version='18.1' xmlns:user='http://www.tableausoftware.com/xml/user'>
-  <document-location>
-    <connection-info class='hyper' filename='Migrated_DS.hyper' table='Extract' />
-  </document-location>
-  <!-- Schema Mappings from MicroStrategy Data Model -->
-</datasource>`);
+  const [tdsXml, setTdsXml] = useState<string>('');
 
   const loadExportData = React.useCallback(async () => {
     if (!jobId) return;
@@ -66,12 +60,6 @@ export default function ExportCenter() {
 
   useEffect(() => {
     loadExportData();
-
-    const interval = setInterval(() => {
-      loadExportData();
-    }, 3000);
-
-    return () => clearInterval(interval);
   }, [loadExportData]);
 
   const targetProject = job?.tableau_target_project || 'Migrated Dashboards';
@@ -286,22 +274,47 @@ export default function ExportCenter() {
             <span style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--ink)' }}>
               Tableau Datasource Specification (.tds XML)
             </span>
-            <div style={{ display: 'flex', gap: '8px' }}>
-              <button onClick={copyXml} className="btn btn-ghost" style={{ padding: '5px 10px', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                {copiedXml ? <><Check size={13} color="var(--green)" /> Copied</> : <><Copy size={13} /> Copy XML</>}
-              </button>
-              <button onClick={downloadXml} className="btn btn-secondary" style={{ padding: '5px 10px', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                <Download size={13} /> Download .tds
-              </button>
-            </div>
+            {tdsXml ? (
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button onClick={copyXml} className="btn btn-ghost" style={{ padding: '5px 10px', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  {copiedXml ? <><Check size={13} color="var(--green)" /> Copied</> : <><Copy size={13} /> Copy XML</>}
+                </button>
+                <button onClick={downloadXml} className="btn btn-secondary" style={{ padding: '5px 10px', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  <Download size={13} /> Download .tds
+                </button>
+              </div>
+            ) : null}
           </div>
-          <pre style={{
-            padding: '16px 20px', margin: 0, fontSize: '0.8125rem', lineHeight: '1.65',
-            fontFamily: 'var(--font-mono)', color: 'var(--ink)', background: 'var(--field)',
-            maxHeight: '550px', overflowY: 'auto', whiteSpace: 'pre-wrap',
-          }}>
-            {tdsXml}
-          </pre>
+          {tdsXml ? (
+            <pre style={{
+              padding: '16px 20px', margin: 0, fontSize: '0.8125rem', lineHeight: '1.65',
+              fontFamily: 'var(--font-mono)', color: 'var(--ink)', background: 'var(--field)',
+              maxHeight: '550px', overflowY: 'auto', whiteSpace: 'pre-wrap',
+            }}>
+              {tdsXml}
+            </pre>
+          ) : (
+            <div
+              style={{
+                padding: '48px 24px',
+                textAlign: 'center',
+                background: 'var(--field)',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '10px',
+              }}
+            >
+              <FileCode size={32} color="var(--ink-3)" />
+              <h4 style={{ fontSize: '0.9375rem', fontWeight: 600, color: 'var(--ink)', margin: 0 }}>
+                Tableau Datasource (.tds) XML Not Available Yet
+              </h4>
+              <p style={{ fontSize: '0.8125rem', color: 'var(--ink-2)', maxWidth: '480px', margin: 0, lineHeight: 1.5 }}>
+                Tableau Datasource (.tds) XML is generated during the <strong>DATASOURCE_EMIT</strong> stage. Once generated and staged by the pipeline, you will be able to inspect and download the raw XML specification here.
+              </p>
+            </div>
+          )}
         </div>
       )}
     </div>

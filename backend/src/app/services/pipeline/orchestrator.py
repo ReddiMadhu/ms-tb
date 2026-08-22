@@ -55,6 +55,100 @@ PIPELINE_STAGES = [
 ]
 
 
+# ── MSTR-definition-driven physical/derived measure classification ──
+# A measure is materialized as a physical Hyper column ONLY when its MSTR
+# expression AST (Modeling API tree, joined via mstr_id from semantic_bundle.json)
+# is a simple aggregation of exactly ONE fact column — e.g. Sum(Revenue).
+# Everything else (ratios, nested aggs, transformations) stays a Tableau calc.
+# Name-keyword heuristics are intentionally NOT used.
+_AGG_FUNCS = {"sum", "avg", "min", "max", "count", "countd"}
+
+
+def _ast_is_single_column_aggregate(node) -> bool:
+    """True iff AST root = aggregation function with exactly one column child."""
+    if not isinstance(node, dict):
+        return False
+    # Real MSTR mexp shape: {ft: <function code>, args: [{did, t}]}
+    if "ft" in node:
+        try:
+            from app.agents.ir_compiler import MSTR_FT_AGG
+            fn = MSTR_FT_AGG.get(node.get("ft"))
+        except Exception:
+            fn = None
+        args = node.get("args") or []
+        return (
+            fn is not None
+            and len(args) == 1
+            and isinstance(args[0], dict)
+            and args[0].get("t") in (4, 12)   # metric / attribute reference
+        )
+    # Modeling-API tree shape: {type, function, children}
+    fn = str(node.get("function") or node.get("operator") or "").strip().lower()
+    children = node.get("children") or []
+    if fn not in _AGG_FUNCS:
+        return False
+    return (
+        len(children) == 1
+        and isinstance(children[0], dict)
+        and str(children[0].get("type", "")).lower() == "column"
+    )
+
+
+def _f_text_is_plain_aggregate(f_text: str) -> bool:
+    """True iff native formula text is exactly AGG(ref) with no params/dimty ops."""
+    import re as _re
+    core, dimty = None, None
+    t = _re.sub(r"<[^<>]*>", "", f_text or "")
+    m = _re.search(r"\{([^{}]*)\}\s*$", t)
+    if m:
+        dimty = m.group(1).strip()
+        t = t[: m.start()]
+    core = t.strip()
+    if dimty not in (None, "~+", "+"):
+        return False
+    return bool(_re.fullmatch(
+        r"(?i)(SUM|AVG|COUNT|MIN|MAX)\(\s*\[?[^\[\]()]+\]?\s*\)", core,
+    ))
+
+
+def classify_physical_measures(measure_dicts: list, bundle_asts: Optional[dict] = None) -> list:
+    """Return the subset of IR measure dicts that qualify as physical extract columns."""
+    bundle_asts = bundle_asts or {}
+    out = []
+    for m in measure_dicts:
+        # 0. MSTR's own derived flag wins: derived metrics are Tableau calcs,
+        #    never physical extract columns (e.g. AVG of another column).
+        if m.get("is_derived"):
+            continue
+        # 1. Ground truth first: the MSTR expression AST (either shape).
+        ast = m.get("expression_ast") or bundle_asts.get(m.get("mstr_id"))
+        if ast is not None:
+            if _ast_is_single_column_aggregate(ast):
+                out.append(m)
+            continue
+
+        # 2. Ground truth second: the native formula text (`f` from datasets.mx).
+        expr_text = (m.get("expression_text") or "").strip()
+        if expr_text and ("<" in expr_text or "{" in expr_text):
+            if _f_text_is_plain_aggregate(expr_text):
+                out.append(m)
+            continue
+
+        # 3. Deterministic fallback when neither exists anywhere: compiled calc must
+        #    EXACTLY self-reference its own column as a plain aggregate.
+        m_name = (m.get("name") or "").strip()
+        m_local = (m.get("local_name") or m_name).strip()
+        calc = (m.get("tableau_calc") or "").strip().upper()
+        for agg in ("SUM", "AVG", "MIN", "MAX", "COUNT", "COUNTD"):
+            if calc in {
+                f"{agg}([{m_name.upper()}])",
+                f"{agg}([{m_local.upper()}])",
+            }:
+                out.append(m)
+                break
+    return out
+
+
 class PipelineOrchestrator:
     """
     Two-Phase migration orchestrator.
@@ -270,6 +364,117 @@ class PipelineOrchestrator:
         finally:
             await mstr.close()
 
+    @staticmethod
+    def _norm_calc(expr: str) -> str:
+        """Normalize a Tableau calc for equality comparison."""
+        import re as _re
+        return _re.sub(r"\s+", " ", (expr or "").strip().upper())
+
+    def _merge_duplicate_measures(self, ir, artifacts_dir: str) -> dict:
+        """
+        Merge semantically identical measures into one canonical IRMeasure.
+
+        Safety rule (ADR-027 hardening): a fingerprint collision alone is NOT
+        sufficient evidence for a merge — when MSTR expression ASTs are absent,
+        every measure hashes the empty dict and distinct metrics (e.g. SUM vs
+        AVG over the same column) can share a fingerprint. A merge additionally
+        requires positive evidence of equality: identical non-empty expression
+        AST JSON, or identical normalized compiled Tableau calc.
+
+        Returns {dropped_mstr_id: canonical_mstr_id} so downstream reference
+        resolution (viz GUID → canonical field name) maps to survivors.
+        """
+        groups: dict[str, list] = {}
+        for m in ir.measures:
+            evidence = ""
+            ast = getattr(m, "expression_ast", None)
+            if ast:
+                evidence = "ast:" + json.dumps(ast, sort_keys=True)
+            else:
+                calc = self._norm_calc(getattr(m, "tableau_calc", ""))
+                # Placeholder calcs ("// TODO") carry no evidence — never merge
+                if calc and not calc.startswith("//"):
+                    evidence = "calc:" + calc
+            groups.setdefault(f"{getattr(m, 'fingerprint_hash', '')}|{evidence}", []).append(m)
+
+        referenced_ids = {
+            dep for m in ir.measures for dep in (getattr(m, "dependencies", None) or [])
+        }
+
+        merge_aliases: dict[str, str] = {}   # dropped mstr_id → canonical mstr_id
+        name_aliases: dict[str, str] = {}    # dropped local_name (lower) → canonical local_name
+        merge_records: list[dict] = []
+        dropped_ids: set[str] = set()
+
+        for key, members in groups.items():
+            if len(members) < 2:
+                continue
+            evidence_kind = key.split("|", 1)[1][:6]
+            # Deterministic canonical choice: a measure that other survivors
+            # depend on wins; otherwise lexicographically smallest mstr_id.
+            members_sorted = sorted(
+                members,
+                key=lambda m: (m.mstr_id not in referenced_ids, m.mstr_id),
+            )
+            canonical = members_sorted[0]
+            for dup in members_sorted[1:]:
+                merge_aliases[dup.mstr_id] = canonical.mstr_id
+                name_aliases[(dup.local_name or "").lower()] = canonical.local_name
+                dropped_ids.add(dup.mstr_id)
+                merge_records.append({
+                    "dropped": dup.name,
+                    "dropped_mstr_id": dup.mstr_id,
+                    "canonical": canonical.name,
+                    "canonical_mstr_id": canonical.mstr_id,
+                    "evidence": evidence_kind,
+                })
+                logger.info(
+                    "Dedup merge: '%s' ≡ '%s' → canonical '%s' (evidence: %s)",
+                    dup.name, canonical.name, canonical.name,
+                    "expression AST" if evidence_kind == "ast:" else "identical compiled calc",
+                )
+
+        if not dropped_ids:
+            logger.info(
+                "Metric dedup: no semantically identical measures among %d", len(ir.measures),
+            )
+            return merge_aliases
+
+        # Rewrite surviving formulas that reference a dropped measure by name,
+        # and rewire dependency edges to the canonical mstr_id.
+        import re as _re
+
+        def _rewrite(formula: str) -> str:
+            def sub(mt):
+                inner = mt.group(1).strip()
+                return f"[{name_aliases.get(inner.lower(), inner)}]"
+            return _re.sub(r"\[([^\]]+)\]", sub, formula or "")
+
+        for m in ir.measures:
+            if m.mstr_id in dropped_ids:
+                continue
+            new_calc = _rewrite(getattr(m, "tableau_calc", ""))
+            if new_calc != (getattr(m, "tableau_calc", "") or ""):
+                m.tableau_calc = new_calc
+            deps = getattr(m, "dependencies", None)
+            if deps:
+                m.dependencies = [merge_aliases.get(d, d) for d in deps]
+
+        ir.measures = [m for m in ir.measures if m.mstr_id not in dropped_ids]
+
+        logger.info(
+            "Metric dedup: merged %d duplicates → %d canonical measures (was %d)",
+            len(dropped_ids), len(ir.measures), len(ir.measures) + len(dropped_ids),
+        )
+
+        try:
+            with open(os.path.join(artifacts_dir, "merge_map.json"), "w") as f:
+                json.dump({"aliases": merge_aliases, "merges": merge_records}, f, indent=2)
+        except Exception as e:
+            logger.warning("Could not persist merge_map.json: %s", e)
+
+        return merge_aliases
+
     async def _run_dedup(self, db: Session, job: Job):
         """Stage 4: Metric deduplication via SemanticFingerprint (ADR-027).
         
@@ -331,6 +536,15 @@ class PipelineOrchestrator:
         compiler = IRCompilerAgent(db=db, job=job)
         ir = compiler.compile(bundle, physical_plan)
 
+        # ── True metric deduplication (ADR-027) ──────────────────────
+        # Fingerprints mark duplicates as scope="shared" but never merge them,
+        # so MSTR's two-layer objects (cube base metric `[Total Incurred USD]`
+        # vs dossier alias metric `[Total Incurred]`) all survive to emission —
+        # bloating the datasource and colliding in Tableau ("field is already
+        # defined by data source"). Merge here, before viz harvesting, so all
+        # worksheet shelf references resolve to the single canonical field.
+        merge_aliases = self._merge_duplicate_measures(ir, artifacts_dir)
+
         # Extract visuals from dossier definition (Phase 3: ROOT CAUSE #2)
         from app.agents.ir_compiler import IRVisual
         from app.models.objects import MigrationObject
@@ -343,6 +557,7 @@ class PipelineOrchestrator:
 
         # Harvest visual metadata map directly from MSTR API instance endpoints
         viz_meta_map = {}
+        mx_formulas = {}   # mstr_id → real formula entry {f, mexp, aggFunc, um, nf}
         try:
             from app.services.mstr_client.session import MSTRSession
             sync_session = MSTRSession(
@@ -357,6 +572,24 @@ class PipelineOrchestrator:
                 try:
                     d_inst = sync_session.create_dossier_instance(dossier_id)
                     d_iid = d_inst.get("mid") or d_inst.get("instanceId")
+
+                    # Harvest REAL metric formulas: GET /api/dossiers/{id}/instances/{mid}
+                    # returns datasets{dsId}.mx[] with per-metric `f` (native formula),
+                    # `mexp` (expression tree {ft,args}), `aggFunc`, `um` (derived flag).
+                    # This is the ground truth that replaces name-based guessing.
+                    try:
+                        inst_full = sync_session.get_dossier_instance(dossier_id, d_iid)
+                        ds_map = inst_full.get("datasets") if isinstance(inst_full, dict) else None
+                        if isinstance(ds_map, dict):
+                            for _ds_id, ds in ds_map.items():
+                                for entry in (ds or {}).get("mx", []) or []:
+                                    did = entry.get("did")
+                                    if did:
+                                        mx_formulas[did] = entry
+                        logger.info("Harvested %d metric formulas from dossier instance", len(mx_formulas))
+                    except Exception as fe:
+                        logger.warning("Formula harvest failed for dossier %s: %s", dossier_id, fe)
+
                     defn = dossier_obj.mstr_definition or {}
                     for chapter in defn.get("chapters", []):
                         ch_key = chapter.get("key")
@@ -364,8 +597,28 @@ class PipelineOrchestrator:
                             for viz in page.get("visualizations", []):
                                 vz_key = viz.get("key", viz.get("id", ""))
                                 try:
-                                    v_detail = sync_session.get_visualization_definition(dossier_id, d_iid, ch_key, vz_key)
-                                    res = v_detail.get("result", {}).get("definition", {})
+                                    try:
+                                        v_detail = sync_session.get_visualization_definition(dossier_id, d_iid, ch_key, vz_key)
+                                    except Exception as v1_err:
+                                        # V1 endpoint rejects cross-tabs (iServerCode -2147171504),
+                                        # subtotal grids (-2147171501), and compound grids (ERR006).
+                                        # The error text explicitly directs callers to /api/v2/...
+                                        v1_msg = str(v1_err)
+                                        if (
+                                            "-2147171504" in v1_msg
+                                            or "-2147171501" in v1_msg
+                                            or "not supported in current version" in v1_msg
+                                            or "compound grid" in v1_msg.lower()
+                                        ):
+                                            v_detail = sync_session.get_visualization_definition_v2(
+                                                dossier_id, d_iid, ch_key, vz_key,
+                                            )
+                                            logger.info(
+                                                "Visual %s recovered via /api/v2 endpoint (V1 unsupported type)", vz_key,
+                                            )
+                                        else:
+                                            raise
+                                    res = v_detail.get("result", {}).get("definition", {}) or v_detail.get("definition", {})
                                     v_metrics = [m.get("name") for m in res.get("metrics", []) if m.get("name")]
                                     v_attrs = [a.get("name") for a in res.get("attributes", []) if a.get("name")]
                                     v_metric_ids = [m.get("id") for m in res.get("metrics", []) if m.get("id")]
@@ -378,14 +631,61 @@ class PipelineOrchestrator:
                                         "attribute_ids": v_attr_ids,
                                         "number_formatting": num_format,
                                     }
-                                except Exception:
-                                    pass
+                                except Exception as ve:
+                                    # Silent drops here produced visuals with missing
+                                    # shelves that LOOKED migrated. Surface every failure.
+                                    logger.warning(
+                                        "Visual definition harvest failed for dossier=%s chapter=%s viz=%s: %s",
+                                        dossier_id, ch_key, vz_key, ve,
+                                    )
                 except Exception as de:
                     logger.warning("Could not create dossier instance for visual metadata: %s", de)
             sync_session.close()
             logger.info("Harvested ground-truth metadata for %d visuals from MSTR", len(viz_meta_map))
         except Exception as e:
             logger.warning("Could not harvest visual metadata from MSTR: %s", e)
+
+        # ── Apply REAL MSTR formulas to IR measures (ground-truth wiring) ──
+        # Replaces stub calcs with compilations of the actual `f`/`mexp` data that
+        # MicroStrategy returned for this dossier's metrics.
+        if mx_formulas:
+            enriched = 0
+            for m in ir.measures:
+                info = mx_formulas.get(getattr(m, "mstr_id", None))
+                if not info:
+                    continue
+                changed = False
+                mexp = info.get("mexp")
+                f_text = info.get("f")
+                if isinstance(mexp, dict) and mexp:
+                    m.expression_ast = mexp
+                    changed = True
+                if isinstance(f_text, str) and f_text.strip():
+                    m.expression_text = f_text
+                    changed = True
+                if changed or info.get("um"):
+                    # MSTR reports derived metrics via f/mexp/um — they must stay
+                    # Tableau calcs, never materialized extract columns.
+                    m.is_derived = True
+                if changed:
+                    try:
+                        new_calc = compiler._compile_expression(
+                            m, m.null_policy, m.zero_division_policy,
+                        )
+                        if new_calc and not new_calc.lstrip().startswith("//"):
+                            logger.info("mx formula applied: %s → %s", m.name, new_calc[:90])
+                            m.tableau_calc = new_calc
+                            enriched += 1
+                    except Exception as me:
+                        # Keep prior calc; the discrepancy stays visible in logs.
+                        logger.warning(
+                            "Formula recompilation failed for %s (keeping %s): %s",
+                            m.name, m.tableau_calc, me,
+                        )
+            logger.info(
+                "MSTR formula enrichment: %d/%d measures recompiled from instance formulas",
+                enriched, len(ir.measures),
+            )
 
         # Build canonical ID lookup map from compiled IR for ground-truth resolution
         mstr_id_to_canonical = {}
@@ -395,6 +695,14 @@ class PipelineOrchestrator:
         for d in ir.dimensions:
             if getattr(d, "mstr_id", None):
                 mstr_id_to_canonical[d.mstr_id] = d.local_name
+
+        # Dedup aliases: visuals referencing a merged-away metric (by MSTR GUID)
+        # must bind to the canonical survivor's field, not a dangling name.
+        if merge_aliases:
+            mstr_local = {m.mstr_id: m.local_name for m in ir.measures if getattr(m, "mstr_id", None)}
+            for dropped_id, canon_id in merge_aliases.items():
+                if canon_id in mstr_local:
+                    mstr_id_to_canonical[dropped_id] = mstr_local[canon_id]
 
         for dossier_obj in dossier_objs:
             defn = dossier_obj.mstr_definition
@@ -778,28 +1086,47 @@ class PipelineOrchestrator:
                         seen_col_names.add(col_name)
                         columns.append(TableDefinition.Column(col_name, SqlType.text()))
 
-                    # Only include base raw fact measures in the physical Hyper table.
-                    # Derived/calculated measures (e.g. Avg Claim, Paid Amount, Reserve, Total Incurred, States, etc.)
-                    # are calculated dynamically by Tableau in the TWB XML and should NEVER be physical columns in Hyper.
-                    def is_base_physical_measure(m_dict):
-                        m_name = (m_dict.get("name") or "").strip()
-                        m_local = (m_dict.get("local_name") or m_name).strip()
-                        calc = (m_dict.get("tableau_calc") or "").strip()
+                    # ── MSTR-definition-driven physical/derived classification ──
+                    # Join IR measures to their MSTR expression ASTs (semantic_bundle.json)
+                    # and keep only simple single-column aggregates as physical columns.
+                    bundle_asts = {}
+                    bundle_path = os.path.join(artifacts_dir, "semantic_bundle.json")
+                    if os.path.exists(bundle_path):
+                        try:
+                            with open(bundle_path) as bf:
+                                for bm in json.load(bf).get("measures", []):
+                                    if bm.get("mstr_id"):
+                                        bundle_asts[bm["mstr_id"]] = bm.get("expression_ast")
+                        except Exception as be:
+                            logger.warning("Could not read semantic bundle for AST join: %s", be)
 
-                        # If measure formula is derived from a different column (e.g. AVG([Total Incurred USD]), SUM([Paid Amount USD]), COUNTD([State]), etc.)
-                        # it is a Tableau calculated field, not a base physical column!
-                        if calc:
-                            self_ref_sums = [f"SUM([{m_name}])", f"SUM([{m_local}])", f"[{m_name}]", f"[{m_local}]"]
-                            if calc not in self_ref_sums:
-                                return False
+                    base_measures = classify_physical_measures(
+                        ir_data.get("measures", []), bundle_asts,
+                    )
 
-                        # If it has calculation keywords (AVG, COUNT, COUNTD, RANK, IF, /, MAX, MIN), it's derived
-                        if any(func in calc.upper() for func in ["AVG(", "COUNT(", "COUNTD(", "RANK(", "MAX(", "MIN(", "MEDIAN(", "IF ", "/"]):
-                            return False
-
-                        return True
-
-                    base_measures = [m for m in ir_data.get("measures", []) if is_base_physical_measure(m)]
+                    # Persist the physical-vs-derived decision so downstream
+                    # emission stages (TDS/TWB) bind these measures to extract
+                    # columns instead of re-declaring them as calculations —
+                    # duplicate definitions make Tableau reject the workbook.
+                    try:
+                        with open(os.path.join(artifacts_dir, "physical_measures.json"), "w") as pf:
+                            json.dump(
+                                [
+                                    {
+                                        "mstr_id": m.get("mstr_id"),
+                                        "local_name": m.get("local_name", m.get("name")),
+                                        "name": m.get("name"),
+                                    }
+                                    for m in base_measures
+                                ],
+                                pf, indent=2,
+                            )
+                        logger.info(
+                            "Physical measure decision persisted: %d of %d measures materialized as extract columns",
+                            len(base_measures), len(ir_data.get("measures", [])),
+                        )
+                    except Exception as pe:
+                        logger.warning("Could not persist physical_measures.json: %s", pe)
 
                     for measure in base_measures:
                         col_name = measure.get("local_name", measure.get("name", "measure"))
@@ -866,47 +1193,33 @@ class PipelineOrchestrator:
                                 inserter.execute()
                                 logger.info("Successfully populated Hyper extract with %d LIVE MSTR rows", len(live_extracted_rows))
                             else:
-                                # Populate representative validation rows if offline
-                                logger.info("No live session rows — inserting 50 verification rows into Hyper extract")
-                                for i in range(50):
-                                    row = []
-                                    for d in dims:
-                                        name = (d.get("name", d.get("local_name", "dim")) or "").strip()
-                                        n_lower = name.lower()
-                                        if "status" in n_lower:
-                                            row.append(["Open", "Closed", "Pending", "In Review", "Approved", "Reopened"][i % 6])
-                                        elif "state" in n_lower or "geography" in n_lower:
-                                            row.append(["California", "Texas", "New York", "Florida", "Illinois", "Ohio", "Georgia", "North Carolina", "Pennsylvania", "Michigan"][i % 10])
-                                        elif "region" in n_lower:
-                                            row.append(["North", "South", "East", "West", "Central"][i % 5])
-                                        elif "cause" in n_lower:
-                                            row.append(["Collision", "Water Damage", "Theft", "Fire", "Hail", "Windstorm", "Vandalism"][i % 7])
-                                        elif "coverage" in n_lower or "policy" in n_lower or "lob" in n_lower or "business" in n_lower:
-                                            row.append(["Comprehensive", "Collision", "Liability", "Property", "Personal Auto", "Commercial"][i % 6])
-                                        elif any(k in n_lower for k in ["date", "time", "month", "year"]):
-                                            row.append(f"2024-{(i % 12) + 1:02d}-{(i % 28) + 1:02d}")
-                                        elif "category" in n_lower or "band" in n_lower:
-                                            row.append(["Tier 1", "Tier 2", "Tier 3", "Tier 4"][i % 4])
-                                        elif any(k in n_lower for k in ["name", "adjuster", "customer", "agent", "user"]):
-                                            row.append(["Alex Morgan", "Jordan Lee", "Taylor Smith", "Morgan Reed", "Chris Evans", "Pat Taylor"][i % 6])
-                                        else:
-                                            row.append(f"{name} {(i % 8) + 1}")
-
-                                    for m in measures:
-                                        m_name = (m.get("name", m.get("local_name", "measure")) or "").strip().lower()
-                                        if any(k in m_name for k in ["percent", "rate", "ratio", "score"]):
-                                            row.append(round(0.05 + (((i * 7) % 90) / 100.0), 4))
-                                        elif any(k in m_name for k in ["days", "time", "count", "volume", "row"]):
-                                            row.append(float(((i * 3 + 7) % 45) + 1))
-                                        elif any(k in m_name for k in ["amount", "usd", "loss", "incurred", "paid", "reserve", "recovery", "salvage", "cost", "expense", "revenue", "sales", "price"]):
-                                            row.append(float(((i * 137 + 250) % 8500) + 150.0))
-                                        else:
-                                            row.append(float(((i * 31 + 47) % 1000) + 10.0))
-                                    inserter.add_row(row)
-                                inserter.execute()
+                                # HONESTY GUARD: Never fabricate "representative" rows offline.
+                                # A Hyper extract built on invented values would produce a
+                                # workbook that LOOKS correct but ships fake numbers. When no
+                                # real source rows are available we emit the schema ONLY and
+                                # surface a data-completeness issue so downstream stages and
+                                # reviewers know the extract is empty, not silently-valid.
+                                logger.warning(
+                                    "No live MSTR rows and no cached source extract available — "
+                                    "creating an EMPTY extract schema with 0 rows (fabricated data is never inserted). "
+                                    "Any dashboard built on this extract will show no data until a real source is wired."
+                                )
+                                from app.models.objects import Issue as IssueModel
+                                db.add(IssueModel(
+                                    job_id=job.id,
+                                    object_id=job.id,
+                                    severity="warning",
+                                    category="data",
+                                    message=(
+                                        "Hyper extract created with 0 rows: no live MSTR session and no "
+                                        "cached source file were available. Extract is NOT verified "
+                                        "against real source data."
+                                    ),
+                                ))
+                                db.commit()
 
             hyper_paths["default"] = hyper_file
-            row_count = len(live_extracted_rows) if live_extracted_rows else 50
+            row_count = len(live_extracted_rows)  # 0 when offline — we never fabricate rows
             logger.info("Hyper extract built: %s (%d columns, %d rows)", hyper_file, len(columns), row_count)
 
         except Exception as e:
@@ -1309,7 +1622,14 @@ class PipelineOrchestrator:
             return
 
         agent = PublishAgent(db=db, job=job)
-        result = await agent.reconcile(promoted_ids)
+        from app.core.config import settings as _settings
+        tableau_config = {
+            "server_url": _settings.tableau_server_url,
+            "site_id": _settings.tableau_site_id,
+            "token_name": self.tableau_token_name or _settings.tableau_token_name,
+            "token_value": self.tableau_token_value or _settings.tableau_token_value,
+        }
+        result = await agent.reconcile(promoted_ids, tableau_config=tableau_config)
         logger.info("Reconciliation: %s", result)
 
     async def _run_report(self, db: Session, job: Job):

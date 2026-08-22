@@ -43,6 +43,74 @@ from app.models.objects import Artifact, DatasourcePathRewrite
 
 logger = logging.getLogger(__name__)
 
+_AGG_FUNCS_WRAPPING = ("COUNTD", "MEDIAN", "COUNT", "SUM", "AVG", "MIN", "MAX")
+
+
+def _wrap_bare_aggregate_refs(formula: str, bare_names: set) -> str:
+    """
+    Wrap references to bare (physical extract column) measures in SUM() unless
+    they already sit inside an aggregation call. A single left-to-right scan
+    tracks function-call nesting so `[X] / SUM([Y])` wraps only [X], while
+    `SUM([X]) / [Y]` wraps only [Y] — a regex/prefix heuristic cannot
+    distinguish these cases.
+    """
+    AGGS = _AGG_FUNCS_WRAPPING
+    out: list[str] = []
+    stack: list[bool] = []   # per open paren: True when inside an agg call
+    i, n = 0, len(formula)
+
+    while i < n:
+        ch = formula[i]
+
+        if ch == "[":
+            j = formula.find("]", i)
+            if j == -1:
+                out.append(formula[i:])
+                break
+            name = formula[i + 1:j].strip()
+            if name in bare_names and not any(stack):
+                out.append(f"SUM([{name}])")
+            else:
+                out.append(formula[i:j + 1])
+            i = j + 1
+            continue
+
+        if ch.isalpha():
+            j = i
+            while j < n and (formula[j].isalpha() or formula[j] == "_"):
+                j += 1
+            word = formula[i:j].upper()
+            k = j
+            while k < n and formula[k] in " \t\r\n":
+                k += 1
+            if k < n and formula[k] == "(":
+                stack.append(word in AGGS)
+                out.append(formula[i:k + 1])
+                i = k + 1
+                continue
+            out.append(formula[i:j])
+            i = j
+            continue
+
+        if ch == "(":
+            # Bare grouping paren — inherit enclosing agg context
+            stack.append(any(stack))
+            out.append(ch)
+            i += 1
+            continue
+
+        if ch == ")":
+            if stack:
+                stack.pop()
+            out.append(ch)
+            i += 1
+            continue
+
+        out.append(ch)
+        i += 1
+
+    return "".join(out)
+
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  Tableau XML namespace constants
@@ -185,8 +253,8 @@ class TableauEmitterAgent:
             "version": TABLEAU_VERSION,
         })
 
-        self._inject_datasource_columns(root, ir)
-        self._inject_calculated_fields(root, ir)
+        existing_cols = self._inject_datasource_columns(root, ir)
+        self._inject_calculated_fields(root, ir, existing_cols=existing_cols)
         self._inject_connection(root, ir, hyper_paths)
 
         tds_path = tds_dir / f"{ds_name}.tds"
@@ -222,11 +290,11 @@ class TableauEmitterAgent:
         # Connection
         self._inject_connection(ds, ir, hyper_paths)
 
-        # Columns (dimensions)
-        self._inject_datasource_columns(ds, ir)
+        # Columns (dimensions) — declared names feed the dedup guard below
+        existing_cols = self._inject_datasource_columns(ds, ir)
 
         # Calculated fields (measures)
-        self._inject_calculated_fields(ds, ir)
+        self._inject_calculated_fields(ds, ir, existing_cols=existing_cols)
 
         return ds
 
@@ -259,14 +327,22 @@ class TableauEmitterAgent:
                 # Multi-table star schema — build join tree
                 self._build_join_tree(conn, ir)
 
-    def _inject_datasource_columns(self, ds_node, ir):
-        """Inject dimension columns and raw fact columns into datasource."""
+    def _inject_datasource_columns(self, ds_node, ir) -> set:
+        """Inject dimension columns and raw fact columns into datasource.
+
+        Returns the set of declared column names so calculated-field emission
+        can never re-declare a colliding name (Tableau rejects duplicate
+        definitions with "field is already defined by data source").
+        """
         existing_cols = set()
         for dim in ir.dimensions:
             dtype = self._map_to_tableau_datatype(dim.data_type)
             dname = getattr(dim, "name", getattr(dim, "local_name", getattr(dim, "caption", "")))
-            # If numeric dimension like Fraud Score, treat as real measure
-            if dname.lower() in ("fraud score", "fraud_score") or dim.data_type in ("double", "real", "float", "integer", "numeric"):
+            # Numeric-typed dimensions are emitted as quantitative measures.
+            # (Note: we intentionally do NOT special-case any specific field name
+            #  like "Fraud Score" — a name heuristic is demo-specific and would
+            #  corrupt arbitrary numeric dimensions with non-numeric names.)
+            if dim.data_type in ("double", "real", "float", "integer", "numeric"):
                 dtype = "real"
                 role = "measure"
                 col_type = "quantitative"
@@ -286,9 +362,77 @@ class TableauEmitterAgent:
             if dim.hidden:
                 col.set("hidden", "true")
 
-    def _inject_calculated_fields(self, ds_node, ir):
-        """Inject calculated field columns (measures) in topo-sorted order."""
+        return existing_cols
+
+    def _physical_measure_ids(self, ir) -> set:
+        """
+        Identify measures that were materialized as physical Hyper extract
+        columns by classify_physical_measures. These must NOT also be emitted
+        as workbook calculations — a duplicate definition makes Tableau drop
+        the calc field on open ("field is already defined by data source").
+
+        Primary source: physical_measures.json persisted by the HYPER_BUILD
+        stage (authoritative — reflects exactly which columns exist in the
+        extract). Fallback: recompute with the same deterministic predicate.
+        """
+        decision_path = self.artifacts_dir / "physical_measures.json"
+        if decision_path.exists():
+            try:
+                with open(decision_path) as f:
+                    entries = json.load(f)
+                ids = {e.get("mstr_id") for e in entries if e.get("mstr_id")}
+                if ids:
+                    return ids
+            except Exception as e:
+                logger.warning(
+                    "Could not read physical_measures.json (%s); recomputing classification", e,
+                )
+
+        try:
+            from app.services.pipeline.orchestrator import classify_physical_measures
+
+            dicts = []
+            for m in ir.measures:
+                dicts.append({
+                    "mstr_id": getattr(m, "mstr_id", None),
+                    "is_derived": bool(getattr(m, "is_derived", False)),
+                    "expression_ast": getattr(m, "expression_ast", None),
+                    "expression_text": getattr(m, "expression_text", None),
+                    "name": getattr(m, "name", "") or "",
+                    "local_name": getattr(m, "local_name", "") or getattr(m, "caption", ""),
+                    "tableau_calc": getattr(m, "tableau_calc", "") or "",
+                })
+            return {
+                d.get("mstr_id") for d in classify_physical_measures(dicts)
+                if d.get("mstr_id")
+            }
+        except Exception as e:
+            logger.warning(
+                "Physical-measure classification unavailable (%s); "
+                "emitting all measures as calculated fields", e,
+            )
+            return set()
+
+    def _inject_calculated_fields(self, ds_node, ir, existing_cols: set | None = None):
+        """Inject calculated field columns (measures) in topo-sorted order.
+
+        Measures classified as physical extract columns are emitted as bare
+        binding columns (no <calculation>) so worksheets resolve them to the
+        pre-computed Hyper values instead of re-declaring a colliding field.
+        """
+        existing_cols = existing_cols if existing_cols is not None else set()
+        physical_ids = self._physical_measure_ids(ir)
         sorted_measures = self._topo_sort_measures(ir.measures)
+
+        # Names emitted as bare extract-column bindings (physical measures).
+        # Derived formulas referencing them must wrap the reference in an
+        # aggregation, otherwise the expression mixes row-level and aggregate
+        # operands and Tableau rejects it at query time.
+        physical_local_names = {
+            getattr(m, "local_name", "") or getattr(m, "caption", "")
+            for m in ir.measures
+            if getattr(m, "mstr_id", None) in physical_ids
+        }
 
         # Build map for canonical measure name resolution in formulas
         meas_name_map = {}
@@ -304,6 +448,46 @@ class TableauEmitterAgent:
             loc_name = getattr(measure, "local_name", getattr(measure, "caption", ""))
             meas_name = getattr(measure, "name", loc_name)
 
+            # Duplicate-name guard: a name already declared (dimension column or
+            # an earlier measure) must never be declared twice — Tableau rejects
+            # the workbook with "field is already defined by data source".
+            if f"[{loc_name}]" in existing_cols:
+                logger.warning(
+                    "Skipping duplicate column declaration '%s' (already defined by datasource)",
+                    loc_name,
+                )
+                continue
+
+            # HONESTY GUARD: unresolved translations ("// TODO …", "// NEEDS_REVIEW …")
+            # must never be embedded as Tableau calculation formulas — a comment-only
+            # formula silently renders NULL in every viz. Skip the field and surface it.
+            raw_calc = (getattr(measure, "tableau_calc", "") or "").strip()
+            if raw_calc.startswith("//"):
+                logger.warning(
+                    "Skipping calculated field '%s': formula is an unresolved placeholder (%s). "
+                    "Resolve it via the review queue before re-emission.",
+                    meas_name, raw_calc[:80],
+                )
+                try:
+                    from app.models.objects import Issue as IssueModel
+                    self.db.add(IssueModel(
+                        job_id=self.job.id,
+                        object_id=getattr(measure, "mstr_id", None),
+                        severity="warning",
+                        category="emission",
+                        message=(
+                            f"Calculated field '{meas_name}' was NOT emitted into the workbook: "
+                            f"unresolved formula ({raw_calc[:120]})."
+                        ),
+                    ))
+                    self.db.commit()
+                except Exception:
+                    pass
+                continue
+
+            existing_cols.add(loc_name)
+            existing_cols.add(f"[{loc_name}]")
+
             col = etree.SubElement(ds_node, "column", attrib={
                 "caption": xml_escape(measure.caption),
                 "datatype": "real",
@@ -312,35 +496,7 @@ class TableauEmitterAgent:
                 "type": "quantitative",
             })
 
-            formula = (getattr(measure, "tableau_calc", "") or "").strip()
-            formula = formula.replace("[[", "[").replace("]]", "]")
-
-            # Canonical field replacements for datasets where MSTR used virtual flag aliases
-            formula = formula.replace("[High Fraud Flag]", "IF INT([Fraud Score]) >= 80 THEN 1 ELSE 0 END")
-            formula = formula.replace("[Litigation_Flag]", "IF [Litigation] = 'Yes' OR [Litigation] = '1' THEN 1 ELSE 0 END")
-            formula = formula.replace("[Litigation ID] = '1'", "([Litigation] = 'Yes' OR [Litigation] = '1')")
-            formula = formula.replace("[Litigation ID] = \"1\"", "([Litigation] = 'Yes' OR [Litigation] = '1')")
-            formula = formula.replace("[Net Loss]", "([Total Incurred USD] - ZN([Recovery Amount USD]) - ZN([Salvage]))")
-
-            # Fix Avg (Fraud Score) to cast string to float
-            if formula == "AVG([Fraud Score])":
-                formula = "AVG(FLOAT([Fraud Score]))"
-
-            # Fix Litigation Incurred Loss: prevent mixing row-level [Litigation] with aggregate [Total Incurred]
-            if "THEN [Total Incurred]" in formula:
-                formula = formula.replace("THEN [Total Incurred]", "THEN [Total Incurred USD]")
-
-            # Fix rate formulas: remove double-aggregation SUM(SUM(...)) over already aggregated measures and LODs
-            formula = formula.replace("SUM([High Fraud Claims])", "[High Fraud Claims]")
-            formula = formula.replace("SUM([Litigation Claims])", "[Litigation Claims]")
-            formula = formula.replace("SUM([Total_Claims])", "[Total_Claims]")
-            formula = formula.replace("SUM([Total Claims])", "[Total_Claims]")
-            formula = formula.replace("ZN([High Fraud Claims])", "[High Fraud Claims]")
-            formula = formula.replace("ZN([Litigation Claims])", "[Litigation Claims]")
-
-            # Ensure parentheses are perfectly balanced
-            while formula.count('(') < formula.count(')'):
-                formula = formula.rstrip(')')
+            formula = raw_calc.replace("[[", "[").replace("]]", "]")
 
             # Resolve formula token references
             def _replace_ref(match):
@@ -352,6 +508,13 @@ class TableauEmitterAgent:
 
             formula = re.sub(r'\[([^\]]+)\]', _replace_ref, formula)
 
+            # Aggregate-wrap bare physical references inside derived formulas.
+            # A token bound to a raw extract column is row-level; combining it
+            # with an aggregate sibling (e.g. a SUM calc) without wrapping
+            # produces "Cannot mix aggregate and non-aggregate" in Tableau.
+            if formula and physical_local_names:
+                formula = _wrap_bare_aggregate_refs(formula, physical_local_names)
+
             self_refs = {
                 f"[{loc_name}]", f"[{meas_name}]",
                 f"SUM([{loc_name}])", f"SUM([{meas_name}])",
@@ -362,6 +525,20 @@ class TableauEmitterAgent:
                 f"MAX([{loc_name}])", f"MAX([{meas_name}])",
                 f"MEDIAN([{loc_name}])", f"MEDIAN([{meas_name}])",
             }
+
+            is_physical = getattr(measure, "mstr_id", None) in physical_ids
+            if is_physical and formula and formula not in self_refs:
+                # This measure was materialized as a physical Hyper extract
+                # column (classify_physical_measures). Emitting the same name
+                # as a workbook calculation duplicates the datasource field —
+                # Tableau drops the calc with "field is already defined by
+                # data source". Bind to the pre-computed extract column instead.
+                logger.info(
+                    "Measure '%s' is a physical extract column — emitting binding column "
+                    "without <calculation> (avoids duplicate field definition)",
+                    meas_name,
+                )
+                formula = ""
 
             # Only emit <calculation> for truly derived expressions (not self-referencing raw fact columns)
             if formula and formula not in self_refs:

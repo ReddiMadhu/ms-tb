@@ -3,7 +3,7 @@ import { ShieldCheck, CheckCircle2, AlertTriangle, XCircle, Info } from 'lucide-
 
 export interface GateStatus {
   name: string;
-  score: number;
+  score: number | null | undefined;
   threshold: number;
   passed: boolean;
   blockers: number;
@@ -24,56 +24,76 @@ interface ValidationScorecardProps {
   } | null;
 }
 
+function buildGate(
+  name: string,
+  score: number | null | undefined,
+  threshold: number,
+  description: string,
+  extraCondition: boolean = true
+): GateStatus {
+  const isEvaluated = score !== null && score !== undefined;
+  const passed = isEvaluated ? (score >= threshold && extraCondition) : false;
+  // ONLY trigger gate failure and blockers when score is explicitly evaluated and below threshold
+  const blockers = isEvaluated && (!passed) ? 1 : 0;
+
+  return {
+    name,
+    score,
+    threshold,
+    passed,
+    blockers,
+    description,
+  };
+}
+
 export const ValidationScorecard: React.FC<ValidationScorecardProps> = ({
   gates: customGates,
   autoPublishEligible,
   totalBlockers = 0,
   job,
 }) => {
-  // Compute gates from actual DB job record if provided
-  const structuralScore = job?.structural_confidence ?? 1.0;
-  const financialScore = job?.financial_kpi_confidence ?? 0.0;
-  const securityScore = job?.security_confidence ?? 1.0;
-  const visualScore = job?.visual_confidence ?? 1.0;
-
+  // Compute gates from actual DB job record if provided (preserving null/undefined for pending evaluations)
   const computedGates: GateStatus[] = [
-    {
-      name: 'Structural Gate',
-      score: structuralScore,
-      threshold: 0.99,
-      passed: structuralScore >= 0.99,
-      blockers: structuralScore < 0.99 ? 1 : 0,
-      description: 'Schema tables, column mappings, and relationship models',
-    },
-    {
-      name: 'Financial & KPI Numeric Gate',
-      score: financialScore,
-      threshold: 0.98,
-      passed: financialScore >= 0.98,
-      blockers: financialScore < 0.98 ? 1 : 0,
-      description: 'Direct SQL & JSON API aggregation parity against source warehouse',
-    },
-    {
-      name: 'Security & RLS Gate',
-      score: securityScore,
-      threshold: 1.0,
-      passed: securityScore >= 1.0 && (job?.security_parity !== false),
-      blockers: securityScore < 1.0 ? 1 : 0,
-      description: 'Security filter translation and USERNAME() delimiter isolation',
-    },
-    {
-      name: 'Visual & Layout Gate',
-      score: visualScore,
-      threshold: 0.80,
-      passed: visualScore >= 0.80,
-      blockers: visualScore < 0.80 ? 1 : 0,
-      description: 'Worksheet visual types, legends, filters, and container layouts',
-    },
+    buildGate(
+      'Structural Gate',
+      job?.structural_confidence,
+      0.99,
+      'Schema tables, column mappings, and relationship models'
+    ),
+    buildGate(
+      'Financial & KPI Numeric Gate',
+      job?.financial_kpi_confidence,
+      0.98,
+      'Direct SQL & JSON API aggregation parity against source warehouse'
+    ),
+    buildGate(
+      'Security & RLS Gate',
+      job?.security_confidence,
+      1.0,
+      'Security filter translation and USERNAME() delimiter isolation',
+      job?.security_parity !== false
+    ),
+    buildGate(
+      'Visual & Layout Gate',
+      job?.visual_confidence,
+      0.80,
+      'Worksheet visual types, legends, filters, and container layouts'
+    ),
   ];
 
   const gates = customGates || computedGates;
-  const allPassed = gates.every(g => g.passed);
-  const isAutoPublishApproved = autoPublishEligible !== undefined ? autoPublishEligible : (allPassed && totalBlockers === 0);
+  const evaluatedGates = gates.filter((g) => g.score !== null && g.score !== undefined);
+  const allEvaluated = gates.length > 0 && evaluatedGates.length === gates.length;
+  const allPassed = allEvaluated && gates.every((g) => g.passed);
+  const totalGateBlockers = gates.reduce((sum, g) => sum + g.blockers, 0);
+
+  const isAutoPublishApproved =
+    autoPublishEligible !== undefined
+      ? autoPublishEligible
+      : (allPassed && totalBlockers === 0 && totalGateBlockers === 0);
+
+  const hasExplicitBlockers = (totalBlockers > 0) || (totalGateBlockers > 0);
+
   return (
     <div
       style={{
@@ -112,14 +132,34 @@ export const ValidationScorecard: React.FC<ValidationScorecardProps> = ({
             gap: '8px',
             padding: '6px 14px',
             borderRadius: 'var(--radius-full)',
-            background: isAutoPublishApproved ? 'var(--green-tint)' : 'var(--yellow-tint)',
-            color: isAutoPublishApproved ? 'var(--green)' : 'var(--yellow)',
+            background: isAutoPublishApproved
+              ? 'var(--green-tint)'
+              : hasExplicitBlockers
+              ? 'var(--red-tint, rgba(239, 68, 68, 0.1))'
+              : 'var(--yellow-tint)',
+            color: isAutoPublishApproved
+              ? 'var(--green)'
+              : hasExplicitBlockers
+              ? 'var(--red, #ef4444)'
+              : 'var(--yellow)',
             fontSize: '0.8125rem',
             fontWeight: 700,
           }}
         >
-          {isAutoPublishApproved ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />}
-          <span>{isAutoPublishApproved ? 'Auto-Publish Approved' : `${totalBlockers > 0 ? totalBlockers : 'Quality'} Gate Review Pending`}</span>
+          {isAutoPublishApproved ? (
+            <CheckCircle2 size={16} />
+          ) : hasExplicitBlockers ? (
+            <XCircle size={16} />
+          ) : (
+            <AlertTriangle size={16} />
+          )}
+          <span>
+            {isAutoPublishApproved
+              ? 'Auto-Publish Approved'
+              : hasExplicitBlockers
+              ? `${(totalBlockers || totalGateBlockers)} Blocker${(totalBlockers || totalGateBlockers) > 1 ? 's' : ''} Detected`
+              : 'Quality Gate Review Pending'}
+          </span>
         </div>
       </div>
 
@@ -131,7 +171,8 @@ export const ValidationScorecard: React.FC<ValidationScorecardProps> = ({
         }}
       >
         {gates.map((gate) => {
-          const percent = (gate.score * 100).toFixed(1);
+          const isEvaluated = gate.score !== null && gate.score !== undefined;
+          const percent = isEvaluated ? (gate.score! * 100).toFixed(1) : null;
           const thresholdPercent = (gate.threshold * 100).toFixed(0);
 
           return (
@@ -155,7 +196,11 @@ export const ValidationScorecard: React.FC<ValidationScorecardProps> = ({
                 <span style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--ink)' }}>
                   {gate.name}
                 </span>
-                {gate.passed ? (
+                {!isEvaluated ? (
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '0.6875rem', fontWeight: 600, color: 'var(--ink-3)' }}>
+                    <Info size={14} /> Pending
+                  </span>
+                ) : gate.passed ? (
                   <CheckCircle2 size={16} color="var(--green)" />
                 ) : (
                   <XCircle size={16} color="var(--red)" />
@@ -167,11 +212,11 @@ export const ValidationScorecard: React.FC<ValidationScorecardProps> = ({
                   fontSize: '1.5rem',
                   fontWeight: 700,
                   fontFamily: 'var(--font-mono)',
-                  color: gate.passed ? 'var(--green)' : 'var(--red)',
+                  color: !isEvaluated ? 'var(--ink-3)' : gate.passed ? 'var(--green)' : 'var(--red)',
                   marginBottom: '4px',
                 }}
               >
-                {percent}%
+                {isEvaluated ? `${percent}%` : 'Pending'}
               </div>
 
               <div style={{ fontSize: '0.6875rem', color: 'var(--ink-3)', marginBottom: '8px' }}>

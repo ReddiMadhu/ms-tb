@@ -226,37 +226,34 @@ class ValidationAgent:
 
     async def _validate_kpi(self, ir, hyper_paths: dict) -> list[ValidationCheck]:
         """
-        Financial KPI parity checks (ADR-030):
-        - Compare critical KPI values between MSTR and Tableau
-        - Tolerance ≤ 0.1% relative difference
+        Financial KPI verification (ADR-030).
+
+        HONESTY GUARD: A numeric-parity gate must compare the generated Tableau
+        artifact against MSTR results to be meaningful. Merely trusting the
+        LLM/compiler's self-reported `confidence` is NOT a verification and must
+        never yield a passing gate. This pipeline does not currently execute the
+        generated workbook, so every KPI check is marked UNVERIFIED (failed),
+        which forces `financial_kpi_confidence < 1.0` and blocks auto-publish.
+        The block is the correct fail-closed behavior — it keeps fabricated/numeric
+        hazards from being silently promoted, per the repo's own spec audit (F1/F2).
         """
         checks = []
 
         for measure in ir.measures:
-            if measure.confidence >= 0.95:
-                # High-confidence measures: assume parity for now
-                check = ValidationCheck(
-                    check_type="kpi_value",
-                    object_id=measure.mstr_id,
-                    expected="parity",
-                    actual="high_confidence",
-                    passed=True,
-                    tolerance=0.001,
-                    category="financial_kpi",
-                    message=f"KPI '{measure.name}' high confidence ({measure.confidence:.2f})",
-                )
-            else:
-                # Low-confidence: flag for manual verification
-                check = ValidationCheck(
-                    check_type="kpi_value",
-                    object_id=measure.mstr_id,
-                    expected="parity",
-                    actual=f"confidence_{measure.confidence:.2f}",
-                    passed=measure.confidence >= 0.85,
-                    tolerance=0.001,
-                    category="financial_kpi",
-                    message=f"KPI '{measure.name}' needs verification (confidence {measure.confidence:.2f})",
-                )
+            check = ValidationCheck(
+                check_type="kpi_value",
+                object_id=measure.mstr_id,
+                expected="parity",
+                actual="unverified",
+                passed=False,
+                tolerance=0.001,
+                category="financial_kpi",
+                message=(
+                    f"KPI '{measure.name}' value NOT verified against Tableau "
+                    f"(confidence {measure.confidence:.2f} is only a self-report; "
+                    "no workbook execution/read-back is wired for this KPI)"
+                ),
+            )
             checks.append(check)
 
         return checks
@@ -286,16 +283,23 @@ class ValidationAgent:
             )
             checks.append(check)
         else:
-            # For each security filter, validate impersonation
+            # HONESTY GUARD: a real impersonation/member-set diff requires executing
+            # both MSTR (as a test identity) and the published Tableau datasource.
+            # No such execution path is wired here, so every security filter check
+            # FAILS CLOSED as "unverified" instead of silently passing. A pending
+            # test must never contribute a passing security gate (ADR-031 is a hard 1.0).
             for sf in security_filters:
                 check = ValidationCheck(
                     check_type="security_member_set",
                     object_id=sf.mstr_id,
                     expected="member_parity",
-                    actual="pending_impersonation",
-                    passed=True,  # Will be updated during staging validation
+                    actual="unverified",
+                    passed=False,
                     category="security",
-                    message=f"Security filter '{sf.name}' — impersonation test pending",
+                    message=(
+                        f"Security filter '{sf.name}' member set NOT verified — "
+                        "impersonation/publish read-back is not wired; fails closed"
+                    ),
                 )
                 checks.append(check)
 
@@ -316,10 +320,13 @@ class ValidationAgent:
                 check_type="visual_render",
                 object_id=visual.id,
                 expected="renderable",
-                actual="pending_render",
-                passed=True,
+                actual="unverified",
+                passed=False,
                 category="visual",
-                message=f"Visual '{visual.name}' — render check pending",
+                message=(
+                    f"Visual '{visual.name}' render NOT verified — no server-side "
+                    "render/Export-Crosstab read-back is wired; fails closed"
+                ),
             )
             checks.append(check)
 

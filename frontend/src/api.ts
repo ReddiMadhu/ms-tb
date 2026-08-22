@@ -42,6 +42,7 @@ export interface JobProgress {
   objects_failed: number;
   objects_blocked: number;
   objects_skipped: number;
+  percent?: number;
 }
 
 export interface JobValidationSummary {
@@ -587,20 +588,11 @@ export const api = {
       ast_breakdown?: string[];
       tradeoffs?: string;
       alternatives?: Array<{ id: string; name: string; formula: string; confidence: number }>;
-    }>('/agent/explain', { method: 'POST', body: JSON.stringify(data) }).catch(() => ({
-      reasoning: 'Normalized Level Metric dimensionality with target grain mapping.',
-      ast_breakdown: ['Extracted metric expression AST', 'Resolved dimension dimensionality target', 'Synthesized Tableau LOD FIXED syntax'],
-      tradeoffs: 'Preserves aggregation across view filters with exact decimal parity.',
-      alternatives: [],
-    })),
+    }>('/agent/explain', { method: 'POST', body: JSON.stringify(data) }),
 
   retranslateWithAI: (data: { name: string; source_formula: string; current_calc: string; user_prompt: string }) =>
     fetchJSON<{ revised_calc: string; confidence: number; agent_notes: string }>('/agent/retranslate', {
       method: 'POST',
       body: JSON.stringify(data),
-    }).catch(() => ({
-      revised_calc: data.current_calc,
-      confidence: 0.96,
-      agent_notes: 'Adjusted LOD Fixed dimensionality offset per business user prompt.',
-    })),
+    }),
 };

@@ -68,8 +68,21 @@ class LLMTranslationResult:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 DIMTY_LOD_TEMPLATES = {
-    # Dimty pattern → Tableau LOD template
-    "level_metric_fixed": "{{ FIXED [{grain_dims}] : {agg}([{measure}]) }}",
+    # Dimty pattern → Tableau LOD template.
+    #
+    # HONESTY NOTES (see repo spec audit F1/F2):
+    #  - {FIXED} evaluates BEFORE dimension filters in Tableau's order of
+    #    operations, so a level metric compiled to FIXED is silently wrong the
+    #    moment any dimension filter is added. It is only safe when we KNOW no
+    #    interacting dimension filter exists, which this level of the compiler
+    #    cannot guarantee. We therefore never emit FIXED for a dimty metric by
+    #    default; see _pattern_match, which marks such results requires_human_review.
+    #  - Prior-period (Year-1) patterns canNOT be expressed with LOOKUP() because
+    #    LOOKUP is a table calc that inverts to NULL as soon as the prior period is
+    #    filtered out of the view. The correct mechanism is a shifted-key join /
+    #    precomputed prior-period column in the Hyper build. Templates below are
+    #    therefore disabled (None) so code fails closed instead of emitting broken math.
+    "level_metric_fixed": None,      # unsafe without context-enforced filters
     "level_metric_include": "{{ INCLUDE [{grain_dims}] : {agg}([{measure}]) }}",
     "level_metric_exclude": "{{ EXCLUDE [{grain_dims}] : {agg}([{measure}]) }}",
     "running_sum": "RUNNING_SUM(SUM([{measure}]))",
@@ -77,8 +90,10 @@ DIMTY_LOD_TEMPLATES = {
     "percent_of_total": "SUM([{measure}]) / TOTAL(SUM([{measure}]))",
     "rank": "RANK(SUM([{measure}]))",
     "moving_average": "WINDOW_AVG(SUM([{measure}]), -{window}, 0)",
-    "year_over_year": "SUM([{measure}]) - LOOKUP(SUM([{measure}]), -1)",
-    "percent_change": "(SUM([{measure}]) - LOOKUP(SUM([{measure}]), -1)) / ABS(LOOKUP(SUM([{measure}]), -1))",
+    # Prior-period / percent-change translation is a data-model (scaffold) problem,
+    # NOT a LOOKUP() table calc. These are intentionally not auto-expressible here.
+    "year_over_year": None,          # requires prior-period column scaffold
+    "percent_change": None,          # requires prior-period column scaffold
 }
 
 
@@ -308,6 +323,23 @@ class AITranslationAgent:
                         explanation=f"Matched dimty→LOD {level_type} pattern",
                         confidence=0.85,
                         requires_human_review=False,
+                    )
+                elif level_type == "fixed":
+                    # HONESTY GUARD: {FIXED} evaluates before dimension filters in
+                    # Tableau, so a level metric compiled to FIXED is silently wrong
+                    # whenever any dimension filter interacts. We cannot prove the
+                    # absence of interacting filters here, so we FAIL CLOSED and
+                    # require a human to confirm no filter can mutate the grain.
+                    return LLMTranslationResult(
+                        tableau_calc=f"// NEEDS_REVIEW: {measure.name} is a level metric whose FIXED translation is filter-unsafe.",
+                        explanation=(
+                            "Dimty level metric detected; LOOKUP/FIXED translations are "
+                            "filter-unsafe. A shifted-key join / precomputed prior-period "
+                            "or per-visual context-filter strategy must be selected "
+                            "by human review before this can compile."
+                        ),
+                        confidence=0.30,
+                        requires_human_review=True,
                     )
 
         return None

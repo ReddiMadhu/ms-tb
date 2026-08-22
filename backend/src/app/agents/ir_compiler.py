@@ -17,6 +17,7 @@ Responsibilities:
 import hashlib
 import json
 import logging
+import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -33,6 +34,46 @@ from app.models.objects import (
 )
 
 logger = logging.getLogger(__name__)
+
+# MSTR expression-tree function codes (ft / aggFunc) observed in real
+# dossier-instance responses (datasets[].mx[]). Only codes verified against
+# captured API output are mapped; unknown codes fail closed to text compilation.
+MSTR_FT_AGG = {12: "SUM", 13: "COUNT", 14: "AVG"}
+
+
+def _strip_formula_decorations(text: str) -> tuple[str, Optional[str]]:
+    """Strip MSTR <param> blocks and trailing {dimty} from a native formula.
+
+    Returns (core_text, dimty) where dimty is None when absent/default.
+    """
+    t = re.sub(r"<[^<>]*>", "", text or "")
+    dimty = None
+    m = re.search(r"\{([^{}]*)\}\s*$", t)
+    if m:
+        dimty = m.group(1).strip()
+        t = t[: m.start()]
+    return t.strip(), dimty
+
+
+def _split_top_level(s: str) -> list[str]:
+    """Split on top-level commas (depth-0 relative to the string)."""
+    parts, depth, cur = [], 0, []
+    for ch in s:
+        if ch in "([":
+            depth += 1
+        elif ch in ")]":
+            depth -= 1
+        if ch == "," and depth == 0:
+            parts.append("".join(cur))
+            cur = []
+        else:
+            cur.append(ch)
+    parts.append("".join(cur))
+    return parts
+
+
+def _is_mexp(node: Any) -> bool:
+    return isinstance(node, dict) and "ft" in node and "args" in node
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -91,6 +132,10 @@ class IRMeasure:
     dependencies: list[str] = field(default_factory=list)
     null_policy: str = "propagate"
     zero_division_policy: str = "null"
+    # True when MicroStrategy reported this metric as derived/computed
+    # (instance datasets.mx entry carries `f`/`mexp` or um=true). Derived metrics
+    # must be Tableau calculated fields, never materialized extract columns.
+    is_derived: bool = False
 
 
 @dataclass
@@ -199,6 +244,9 @@ class IRCompilerAgent:
         self.db = db
         self.job = job
         self._caption_counter = 0
+        # MSTR object-id → display-name map, populated from the semantic bundle.
+        # Used to resolve {did, t} references in real mexp trees and formula text.
+        self._id_to_name: dict = {}
 
     def compile(self, semantic_bundle, physical_plan) -> BIIR:
         """
@@ -213,6 +261,14 @@ class IRCompilerAgent:
         6. Grain validation
         """
         ir = BIIR(job_id=self.job.id)
+
+        # ── Step 0: MSTR id → name resolution map ───────────────
+        for d in getattr(semantic_bundle, "dimensions", []) or []:
+            self._id_to_name[d.mstr_id] = d.name
+        for fa in getattr(semantic_bundle, "facts", []) or []:
+            self._id_to_name[fa.mstr_id] = fa.name
+        for m in getattr(semantic_bundle, "measures", []) or []:
+            self._id_to_name[m.mstr_id] = m.name
 
         # ── Step 1: Tables ──────────────────────────────────────
 
@@ -361,6 +417,26 @@ class IRCompilerAgent:
 
         for flt in semantic_bundle.filters:
             predicate = self._compile_filter(flt)
+            if predicate is None:
+                # HONESTY GUARD: an uncompilable MSTR filter must never become a
+                # placeholder string that silently flows into the workbook. Record
+                # a blocker so validation fails closed, and ship NO predicate.
+                ir.issues.append(IRIssue(
+                    id=str(uuid.uuid4()),
+                    severity="blocker",
+                    category="filter",
+                    object_id=flt.mstr_id,
+                    message=(
+                        f"Filter '{flt.name}' could not be compiled from its MSTR "
+                        "definition (predicate tree missing or unsupported). The "
+                        "generated workbook does NOT apply this filter."
+                    ),
+                ))
+                logger.warning(
+                    "Filter '%s' (%s) has no compilable predicate — recorded as blocker",
+                    flt.name, flt.mstr_id,
+                )
+                predicate = ""
             ir_filter = IRFilter(
                 id=str(uuid.uuid4()),
                 mstr_id=flt.mstr_id,
@@ -385,16 +461,14 @@ class IRCompilerAgent:
         """
         Compile MSTR metric expression into Tableau calculated field syntax.
 
-        Handles:
-        - Pre-computed expressions from managed metrics (bypasses AST/text parsing)
-        - Simple aggregations (SUM, COUNT, AVG, etc.)
-        - Arithmetic operators
-        - Null propagation policy (ZN wrapping)
-        - Zero division handling (IIF wrapping)
-        - Dimty → LOD expression mapping
+        Priority order (all ground-truth driven, no name heuristics):
+        1. Pre-computed calc from managed metrics (ADR-032)
+        2. mexp tree from the dossier instance / Model API ({ft, args} shape)
+        3. Native formula text `f` (datasets[].mx[].f) with params/dimty handling
+        4. Modeling-API AST ({type, function, children} shape)
+        5. Plain expression text
         """
         # ── Fast path: pre-computed calc (managed metrics, ADR-032) ──
-        # Managed metrics provide a ready-made Tableau calc derived from subtotalType.
         if getattr(measure, "precomputed_calc", None):
             return measure.precomputed_calc
 
@@ -405,19 +479,151 @@ class IRCompilerAgent:
             local = self._make_local_name(measure.name)
             return f"SUM([{local}])"
 
-        # Try to compile from AST
-        if ast and isinstance(ast, dict):
+        # ── mexp tree shape from real MSTR instance responses ──
+        if _is_mexp(ast):
+            agg = MSTR_FT_AGG.get(ast.get("ft"))
+            args = ast.get("args") or []
+            if (
+                agg
+                and len(args) == 1
+                and isinstance(args[0], dict)
+                and args[0].get("t") in (4, 12)   # metric or attribute reference
+            ):
+                ref_name = self._id_to_name.get(args[0].get("did")) or measure.name
+                return f"{agg}([{self._make_local_name(ref_name)}])"
+            # Non-trivial mexp → fall through to native-formula text, which is richer.
+
+        # ── Native MSTR formula text (`f`) — primary text path ──
+        if expr_text and isinstance(expr_text, str):
+            _, dimty_probe = _strip_formula_decorations(expr_text)
+            if dimty_probe not in (None, "~+", "+"):
+                # Non-default dimensionality is LOD-unsafe under filters — fail closed.
+                logger.info(
+                    "Measure '%s' uses dimty {%s} — requires human review (filter-unsafe)",
+                    measure.name, dimty_probe,
+                )
+                return (
+                    f"// NEEDS_REVIEW: {measure.name} — MSTR formula carries non-default "
+                    f"dimensionality {{{dimty_probe}}}; select a filter-safe strategy first"
+                )
+            compiled = self._compile_mstr_formula(expr_text, zero_div_policy)
+            if compiled:
+                return compiled
+
+        # Try to compile from Modeling-API AST shape
+        if ast and isinstance(ast, dict) and not _is_mexp(ast):
             compiled = self._ast_to_tableau(ast, null_policy, zero_div_policy)
             if compiled:
                 return compiled
 
-        # Fallback: wrap expression text
+        # Fallback: legacy text wrapper
         if expr_text:
-            # Simple pattern matching for common expressions
             return self._text_to_tableau(expr_text, null_policy, zero_div_policy)
 
         local = self._make_local_name(measure.name)
         return f"SUM([{local}])"
+
+    def _compile_mstr_formula(self, f_text: str, zero_div_policy: str = "null") -> Optional[str]:
+        """
+        Compile a native MSTR formula string (datasets[].mx[].f) to Tableau syntax.
+
+        Real examples this handles (from captured API responses):
+          "Avg<UseLookupForAttributes=False >([Fraud Score]){~+}"     → AVG([Fraud Score])
+          "[High Fraud Claims] / Total_Claims"                         → guarded division
+          "Sum<UseLookupForAttributes=False >(IF((Litigation@ID = \"1\"),[Total Incurred],0)){~+}"
+               → SUM(IF (...) THEN [Total Incurred] ELSE 0 END)
+
+        Returns None (fail-closed) for formulas we cannot translate honestly,
+        e.g. non-default dimensionality ({Year}) which is LOD-unsafe.
+        """
+        if not f_text or not isinstance(f_text, str):
+            return None
+
+        core, dimty = _strip_formula_decorations(f_text)
+        if not core:
+            return None
+        if dimty and dimty not in ("~+", "+"):
+            logger.info(
+                "Formula has non-default dimty {%s} — not auto-translatable (filter semantics); failing closed",
+                dimty,
+            )
+            return None
+
+        # IF(cond, a, b) → IF cond THEN a ELSE b END — balanced-paren scan,
+        # because MSTR nests IFs inside aggregate wrappers: Sum(IF(c,x,0))
+        def _translate_if_calls(s: str) -> str:
+            out, i, low = [], 0, s.lower()
+            while True:
+                j = low.find("if", i)
+                if j == -1:
+                    break
+                if j > 0 and (s[j - 1].isalnum() or s[j - 1] in "_["):
+                    i = j + 2
+                    continue
+                k = s.find("(", j)
+                if k == -1:
+                    break
+                depth, end = 0, -1
+                for p in range(k, len(s)):
+                    if s[p] == "(":
+                        depth += 1
+                    elif s[p] == ")":
+                        depth -= 1
+                        if depth == 0:
+                            end = p
+                            break
+                if end == -1:
+                    break
+                parts = _split_top_level(s[k + 1 : end])
+                if len(parts) != 3:
+                    i = end + 1
+                    continue
+                out.append(s[i:j])
+                out.append(
+                    f"IF {parts[0].strip()} THEN {parts[1].strip()} ELSE {parts[2].strip()} END"
+                )
+                i = end + 1
+            out.append(s[i:])
+            return "".join(out)
+
+        core = _translate_if_calls(core)
+
+        # Attribute@ID → [Attribute]
+        core = re.sub(r"([A-Za-z_][\w ]*?)@ID", lambda mm: f"[{mm.group(1).strip()}]", core)
+
+        # Bracket bare identifiers outside of existing [..] refs, so MSTR's
+        # unbracketed metric/attribute names become valid Tableau fields.
+        _KEYWORDS = {"IF", "THEN", "ELSE", "END", "AND", "OR", "NOT", "NULL", "TRUE", "FALSE"}
+        segments = re.split(r"(\[[^\]]*\])", core)
+        for si, seg in enumerate(segments):
+            if seg.startswith("["):
+                continue
+            def _bracket(mm):
+                tok = mm.group(0).strip()
+                if tok.upper() in _KEYWORDS:
+                    return mm.group(0)
+                return f"[{tok}]"
+            segments[si] = re.sub(
+                r"\b[A-Za-z_][A-Za-z0-9_]*\b(?!\s*\()", _bracket, seg,
+            )
+        core = "".join(segments)
+
+        # Normalize leading aggregation casing: Sum(...) → SUM(...)
+        core = re.sub(
+            r"^(sum|avg|count|min|max|median|stdev|stdevp|var|varp)\(",
+            lambda mm: f"{mm.group(1).upper()}(",
+            core,
+            flags=re.IGNORECASE,
+        )
+
+        # Top-level simple division gets the zero-division guard
+        if core.count("/") == 1 and "(" not in core:
+            left, right = (p.strip() for p in core.split("/", 1))
+            if zero_div_policy == "zero":
+                return f"IIF({right} = 0, 0, {left} / {right})"
+            return f"IIF({right} = 0, NULL, {left} / {right})"
+
+        return core
 
     def _ast_to_tableau(self, node: dict, null_policy: str, zero_div_policy: str) -> Optional[str]:
         """Recursively compile MSTR expression AST to Tableau syntax."""
@@ -503,13 +709,19 @@ class IRCompilerAgent:
         local = self._make_local_name(text)
         return f"[{local}]"
 
-    def _compile_filter(self, flt) -> str:
-        """Compile filter definition to Tableau filter expression."""
+    def _compile_filter(self, flt) -> Optional[str]:
+        """
+        Compile filter definition to a Tableau predicate expression.
+
+        Returns None when the MSTR predicate cannot be compiled honestly
+        (no predicate tree / unsupported shape). Callers must treat None as
+        fail-closed (blocker + empty predicate), never as a TODO placeholder.
+        """
         if flt.predicate_ast:
             compiled = self._ast_to_tableau(flt.predicate_ast, "propagate", "null")
-            if compiled:
+            if compiled and not compiled.lstrip().startswith("//"):
                 return compiled
-        return f"// TODO: filter predicate for {flt.name}"
+        return None
 
     # ── Semantic Fingerprinting (ADR-027) ───────────────────────
 

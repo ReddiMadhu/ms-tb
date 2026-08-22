@@ -17,7 +17,7 @@ export const ExpressionDiff: React.FC<ExpressionDiffProps> = ({
   sourceLabel = 'MicroStrategy Expression',
   targetLabel = 'Tableau Calculated Field',
   method = 'Rule Compiler',
-  confidence = 0.95,
+  confidence,
   explanation,
 }) => {
   const [copiedTarget, setCopiedTarget] = useState(false);
@@ -46,10 +46,19 @@ export const ExpressionDiff: React.FC<ExpressionDiffProps> = ({
           <span
             className="tool-chip"
             style={{
-              color: confidence >= 0.9 ? 'var(--green)' : 'var(--yellow)',
+              color:
+                confidence != null
+                  ? confidence >= 0.9
+                    ? 'var(--green)'
+                    : confidence >= 0.8
+                    ? 'var(--yellow)'
+                    : 'var(--red)'
+                  : 'var(--ink-2)',
             }}
           >
-            Confidence: {Math.round(confidence * 100)}%
+            {confidence != null
+              ? `Confidence: ${Math.round(confidence * 100)}%`
+              : 'Confidence: Pending / Rule-based'}
           </span>
         </div>
 

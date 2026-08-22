@@ -77,14 +77,6 @@ export default function Objects() {
   useEffect(() => {
     fetchObjects();
     fetchVizPlan();
-
-    // Poll periodically while objects or viz_plan are still being discovered/generated
-    const interval = setInterval(() => {
-      fetchObjects();
-      fetchVizPlan();
-    }, 3000);
-
-    return () => clearInterval(interval);
   }, [fetchObjects, fetchVizPlan]);
 
   // ── Derive Real Entities from DB Objects ───────────────────────
@@ -158,16 +150,19 @@ export default function Objects() {
 
     return metrics.map((m) => {
       const isRatio = m.name.toLowerCase().includes('percent') || m.name.toLowerCase().includes('ratio') || m.tableau_calc?.includes('NULLIF');
-      const formula = m.tableau_calc || (m.expression_text ? m.expression_text : isRatio ? `SUM([${m.name.replace('Percent ', '')}]) / NULLIF(SUM([Views]), 0)` : `SUM([${m.name}])`);
+      const formula = m.tableau_calc || m.expression_text || '(Translation pending)';
 
       const deps: string[] = [];
-      const matches = formula.match(/\[([^\]]+)\]/g);
-      if (matches) {
-        matches.forEach(match => {
-          const cleaned = match.replace(/[[\]]/g, '');
-          if (!deps.includes(cleaned)) deps.push(cleaned);
-        });
-      } else {
+      if (formula !== '(Translation pending)') {
+        const matches = formula.match(/\[([^\]]+)\]/g);
+        if (matches) {
+          matches.forEach(match => {
+            const cleaned = match.replace(/[[\]]/g, '');
+            if (!deps.includes(cleaned)) deps.push(cleaned);
+          });
+        }
+      }
+      if (deps.length === 0) {
         deps.push(m.name);
       }
 
@@ -250,7 +245,7 @@ export default function Objects() {
             <LayoutDashboard size={16} color="var(--primary)" style={{ flexShrink: 0 }} />
             <span style={kpiLabel}>MSTR Dossiers / Workbooks</span>
           </div>
-          <span style={kpiValue}>{dossiers.length || 1}</span>
+          <span style={kpiValue}>{dossiers.length}</span>
         </div>
         <div style={kpiCard}>
           <div style={statHeader}>
@@ -271,7 +266,7 @@ export default function Objects() {
             <Database size={16} color="var(--blue)" style={{ flexShrink: 0 }} />
             <span style={kpiLabel}>MSTR Cubes / Data Sources</span>
           </div>
-          <span style={kpiValue}>{cubes.length || 1}</span>
+          <span style={kpiValue}>{cubes.length}</span>
         </div>
       </div>
 
@@ -557,76 +552,42 @@ export default function Objects() {
       </div>
 
       {/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-          SECTION 4: DATA TABLE PREVIEW (10 Sample Rows)
+          SECTION 4: DATA MODEL SCHEMA & PREVIEW
           ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */}
       {(attributes.length > 0 || metrics.length > 0) && (
         <div style={{ background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 'var(--radius-lg)', padding: '20px', boxShadow: 'var(--shadow-card)', marginTop: '20px', width: '100%', boxSizing: 'border-box', minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px', gap: '8px', flexWrap: 'wrap' }}>
             <div>
               <h3 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--ink)', margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <TableIcon size={18} color="var(--primary)" style={{ flexShrink: 0 }} /> Data Table Preview
+                <TableIcon size={18} color="var(--primary)" style={{ flexShrink: 0 }} /> Data Model Schema &amp; Preview
               </h3>
               <span style={{ fontSize: '0.75rem', color: 'var(--ink-3)' }}>
-                Sample data representation from {cubeName} — {attributes.length} dimensions, {metrics.length} measures
+                Schema structure for {cubeName} — {attributes.length} dimensions, {metrics.length} measures
               </span>
             </div>
-            <span className="tool-chip" style={{ color: 'var(--ink-2)', fontWeight: 600, fontSize: '0.6875rem', flexShrink: 0 }}>
-              Showing 10 of ~500K rows
-            </span>
           </div>
 
-          <div style={{ width: '100%', maxWidth: '100%', overflowX: 'auto', borderRadius: 'var(--radius-md)', border: '1px solid var(--line)', boxSizing: 'border-box', WebkitOverflowScrolling: 'touch' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.75rem', minWidth: '600px' }}>
-              <thead>
-                <tr style={{ background: 'var(--field)', borderBottom: '2px solid var(--line)' }}>
-                  <th style={dataTableTh}>
-                    <span style={{ color: 'var(--ink-3)', fontWeight: 600, fontFamily: 'var(--font-mono)', fontSize: '0.625rem' }}>#</span>
-                  </th>
-                  {attributes.map((attr) => (
-                    <th key={`h-${attr.name}`} style={dataTableTh}>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
-                        <span style={{ fontWeight: 700, color: 'var(--ink)' }}>{attr.name}</span>
-                        <span style={{ fontSize: '0.5625rem', fontWeight: 600, padding: '1px 5px', borderRadius: 'var(--radius-full)', background: 'rgba(13,110,253,0.1)', color: 'var(--blue)', display: 'inline-block', width: 'fit-content' }}>DIMENSION</span>
-                      </div>
-                    </th>
-                  ))}
-                  {metrics.map((met) => (
-                    <th key={`h-${met.name}`} style={dataTableTh}>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
-                        <span style={{ fontWeight: 700, color: 'var(--ink)' }}>{met.name}</span>
-                        <span style={{ fontSize: '0.5625rem', fontWeight: 600, padding: '1px 5px', borderRadius: 'var(--radius-full)', background: 'rgba(34,197,94,0.1)', color: 'var(--green)', display: 'inline-block', width: 'fit-content' }}>MEASURE</span>
-                      </div>
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {Array.from({ length: 10 }, (_, rowIdx) => (
-                  <tr
-                    key={`row-${rowIdx}`}
-                    style={{
-                      borderBottom: '1px solid var(--line)',
-                      background: rowIdx % 2 === 0 ? 'var(--surface)' : 'var(--field)',
-                      transition: 'background 0.15s ease',
-                    }}
-                    onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--primary-tint)'; }}
-                    onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = rowIdx % 2 === 0 ? 'var(--surface)' : 'var(--field)'; }}
-                  >
-                    <td style={{ ...dataTableTd, color: 'var(--ink-3)', fontFamily: 'var(--font-mono)', fontWeight: 600 }}>{rowIdx + 1}</td>
-                    {attributes.map((attr) => (
-                      <td key={`r${rowIdx}-${attr.name}`} style={dataTableTd}>
-                        {generateSampleDimensionValue(attr.name, rowIdx)}
-                      </td>
-                    ))}
-                    {metrics.map((met) => (
-                      <td key={`r${rowIdx}-${met.name}`} style={{ ...dataTableTd, fontFamily: 'var(--font-mono)', color: 'var(--ink)', fontWeight: 600 }}>
-                        {generateSampleMeasureValue(met.name, rowIdx)}
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div
+            style={{
+              padding: '36px 20px',
+              textAlign: 'center',
+              background: 'var(--field)',
+              borderRadius: 'var(--radius-md)',
+              border: '1px dashed var(--line-strong)',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '8px',
+            }}
+          >
+            <Database size={24} color="var(--ink-3)" />
+            <span style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--ink)' }}>
+              Data preview will be generated once Hyper extract is built
+            </span>
+            <span style={{ fontSize: '0.75rem', color: 'var(--ink-3)', maxWidth: '460px' }}>
+              Live row-level sampling and extraction occurs during the HYPER_BUILD and NUMERIC_VALIDATE pipeline stages.
+            </span>
           </div>
         </div>
       )}
@@ -689,81 +650,3 @@ const inspectorBox: React.CSSProperties = {
   padding: '8px', background: 'var(--field)', borderRadius: 'var(--radius-sm)',
   border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', gap: '2px', textAlign: 'center',
 };
-
-/* ── Data Table Preview Styles ── */
-const dataTableTh: React.CSSProperties = {
-  padding: '10px 14px',
-  textAlign: 'left',
-  fontSize: '0.75rem',
-  fontWeight: 700,
-  color: 'var(--ink)',
-  whiteSpace: 'nowrap',
-  borderBottom: '2px solid var(--line)',
-  verticalAlign: 'bottom',
-};
-
-const dataTableTd: React.CSSProperties = {
-  padding: '8px 14px',
-  fontSize: '0.75rem',
-  color: 'var(--ink-2)',
-  whiteSpace: 'nowrap',
-  verticalAlign: 'middle',
-};
-
-/* ── Sample Data Generators ── */
-const DIMENSION_SAMPLES: Record<string, string[]> = {
-  date: ['2025-01-15', '2025-02-20', '2025-03-10', '2025-04-05', '2025-05-12', '2025-06-18', '2025-07-22', '2025-08-30', '2025-09-14', '2025-10-01'],
-  month: ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October'],
-  year: ['2023', '2024', '2025', '2023', '2024', '2025', '2023', '2024', '2025', '2023'],
-  quarter: ['Q1', 'Q2', 'Q3', 'Q4', 'Q1', 'Q2', 'Q3', 'Q4', 'Q1', 'Q2'],
-  campaign: ['Brand Awareness', 'Lead Gen', 'Product Launch', 'Holiday Promo', 'Retargeting', 'Email Nurture', 'Social Push', 'PPC Boost', 'Content Series', 'Partner Co-Op'],
-  region: ['North America', 'EMEA', 'APAC', 'LATAM', 'North America', 'EMEA', 'APAC', 'LATAM', 'North America', 'EMEA'],
-  category: ['Electronics', 'Apparel', 'Home & Garden', 'Sports', 'Beauty', 'Automotive', 'Books', 'Groceries', 'Health', 'Toys'],
-  channel: ['Direct', 'Organic Search', 'Paid Search', 'Social Media', 'Referral', 'Email', 'Display', 'Affiliate', 'Direct', 'Organic Search'],
-  status: ['Active', 'Active', 'Paused', 'Active', 'Completed', 'Active', 'Draft', 'Active', 'Active', 'Paused'],
-  type: ['Standard', 'Premium', 'Basic', 'Enterprise', 'Standard', 'Premium', 'Basic', 'Enterprise', 'Standard', 'Premium'],
-  country: ['United States', 'United Kingdom', 'Germany', 'Japan', 'Australia', 'Canada', 'France', 'India', 'Brazil', 'Singapore'],
-  product: ['Widget Pro', 'Gadget X', 'Service Plus', 'Data Suite', 'Cloud Hub', 'Widget Pro', 'Analytics Kit', 'Platform Core', 'API Gateway', 'Insight Pro'],
-  name: ['Alice Thompson', 'Bob Chen', 'Carol Martinez', 'David Kim', 'Eva Müller', 'Frank Wilson', 'Grace Lee', 'Henry Patel', 'Iris Tanaka', 'James O\'Brien'],
-  article: ['How to Optimize BI', 'Migration Best Practices', 'Data Modeling Guide', 'Dashboard Design Tips', 'ETL Pipeline Patterns', 'Cloud Analytics 101', 'Visualization Trends', 'KPI Framework Setup', 'Self-Service BI Guide', 'Performance Tuning'],
-  published: ['Blog', 'Knowledge Base', 'Blog', 'Docs', 'Blog', 'Knowledge Base', 'Webinar', 'Docs', 'Blog', 'Knowledge Base'],
-  _default: ['Alpha-001', 'Bravo-002', 'Charlie-003', 'Delta-004', 'Echo-005', 'Foxtrot-006', 'Golf-007', 'Hotel-008', 'India-009', 'Juliet-010'],
-};
-
-function generateSampleDimensionValue(fieldName: string, rowIndex: number): string {
-  const lower = fieldName.toLowerCase();
-  for (const [keyword, samples] of Object.entries(DIMENSION_SAMPLES)) {
-    if (keyword === '_default') continue;
-    if (lower.includes(keyword)) {
-      return samples[rowIndex % samples.length];
-    }
-  }
-  // Fallback: check for common patterns
-  if (lower.includes('id') || lower.includes('key')) return `${fieldName.replace(/\s/g, '-').substring(0, 6).toUpperCase()}-${(1000 + rowIndex * 137) % 9999}`;
-  if (lower.includes('flag') || lower.includes('bool')) return rowIndex % 3 === 0 ? 'Yes' : 'No';
-  return DIMENSION_SAMPLES._default[rowIndex % DIMENSION_SAMPLES._default.length];
-}
-
-function generateSampleMeasureValue(fieldName: string, rowIndex: number): string {
-  const lower = fieldName.toLowerCase();
-  const seed = (rowIndex + 1) * 17 + fieldName.length * 7;
-
-  // Percentages / rates
-  if (lower.includes('percent') || lower.includes('rate') || lower.includes('ratio') || lower.includes('share') || lower.includes('confidence')) {
-    const val = (((seed * 31) % 5000) / 100 + 45).toFixed(1);
-    return `${val}%`;
-  }
-  // Revenue / cost / dollar amounts
-  if (lower.includes('revenue') || lower.includes('cost') || lower.includes('price') || lower.includes('amount') || lower.includes('spend') || lower.includes('sales')) {
-    const val = ((seed * 127) % 500000 + 10000);
-    return `$${val.toLocaleString()}`;
-  }
-  // Time-based metrics
-  if (lower.includes('time') || lower.includes('duration') || lower.includes('latency')) {
-    const val = (((seed * 13) % 3000) / 10).toFixed(1);
-    return `${val}s`;
-  }
-  // Count-like metrics (views, clicks, visits, etc.)
-  const val = ((seed * 89) % 100000 + 500);
-  return val.toLocaleString();
-}

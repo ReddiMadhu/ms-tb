@@ -15,6 +15,7 @@ Responsibilities:
 """
 
 import logging
+import os
 import uuid
 from datetime import datetime, timezone
 from typing import Optional
@@ -29,6 +30,44 @@ from app.models.objects import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _build_tableau_auth(config: dict):
+    """
+    Build a tableauserverclient authentication object, or raise if not configured.
+
+    Raises ValueError (fail-closed) when the Tableau Server endpoint or the
+    Connected App / token credentials are missing, so callers never record a
+    fake success when real publishing cannot run.
+    """
+    import tableauserverclient as TSC
+
+    server_url = (config.get("server_url") or "").strip()
+    site_id = (config.get("site_id") or "default").strip()
+    token_name = (config.get("token_name") or "").strip()
+    token_value = (config.get("token_value") or "").strip()
+    if not server_url:
+        raise ValueError("publish.fail_closed: no Tableau Server URL configured")
+    if not (token_name and token_value):
+        raise ValueError(
+            "publish.fail-closed: no Tableau PAT (token_name/token_value) configured — refusing to fake a publish"
+        )
+    auth = TSC.TableauAuth(token_value, site_id, personal_access_token_name=token_name)
+    return TSC.Server(server_url, use_server_version=True), auth, site_id
+
+
+def _resolve_project(server, site_id: str, project_name: str):
+    """Find or create the target project. Returns its id or None on failure."""
+    all_projects, _ = server.projects.get()
+    for p in all_projects:
+        if p.name.lower() == project_name.lower():
+            return p
+    # Create if it does not exist (best-effort; pages project list is not paginated by default)
+    try:
+        p = server.projects.create(server.projects.Resource(name=project_name))
+        return p.id
+    except Exception:
+        return None
 
 
 class PublishAgent:
@@ -49,67 +88,104 @@ class PublishAgent:
         tableau_config: Optional[dict] = None,
     ) -> dict[str, str]:
         """
-        Publish artifacts to staging project.
+        Publish artifacts to the Tableau staging project via tableauserverclient.
 
-        Returns mapping of artifact_name → Tableau Server content ID.
+        Returns mapping artifact_name → real Tableau Server content ID.
+
+        HONESTY GUARD: This performs a REAL publish through TSC. If the Tableau
+        Server/PAT is not configured, or the publish fails, the operation is
+        recorded as failed and NOTHING is returned — a fake UUID is never minted.
         """
         config = tableau_config or {}
-        server_url = config.get("server_url", "")
-        site_id = config.get("site_id", "default")
 
         published = {}
 
-        for artifact in artifacts:
-            artifact_name = artifact.get("name", "unknown")
-            artifact_type = artifact.get("type", "workbook")
-            file_path = artifact.get("path", "")
+        try:
+            server, auth, site_id = _build_tableau_auth(config)
+        except ValueError as e:
+            logger.warning("Staging publish skipped (fail-closed): %s", e)
+            self._record_failed_publish(artifacts, stage="staging", reason=str(e))
+            return {}
 
-            try:
-                # In real implementation: use TSC (tableauserverclient)
-                # server = TSC.Server(server_url)
-                # server.auth.sign_in(auth)
-                # project = server.projects.get_by_name("_migration_staging")
-                # server.workbooks.publish(workbook_item, file_path, mode)
+        try:
+            from tableauserverclient import Server
 
-                server_id = str(uuid.uuid4())  # Would come from TSC response
-                published[artifact_name] = server_id
+            server.auth.sign_in(auth)
+        except Exception as e:
+            logger.error("Staging publish auth/sign-in FAILED: %s", e)
+            self._record_failed_publish(artifacts, stage="staging", reason=f"sign_in failed: {e}")
+            return published
 
-                # Record publish operation
-                op = PublishOperation(
-                    id=str(uuid.uuid4()),
-                    job_id=self.job.id,
-                    artifact_id=artifact.get("id") or str(uuid.uuid4()),
-                    environment="staging",
-                    remote_id=server_id,
-                    remote_project_id="_migration_staging",
-                    operation="publish_staging",
-                    idempotency_key=f"pub_staging_{self.job.id}_{artifact_name}",
-                    status="success",
-                )
-                self.db.add(op)
+        try:
+            project_name = (config.get("staging_project") or "_migration_staging")
+            project_id = _resolve_project(server, site_id, project_name)
+            if not project_id:
+                self._record_failed_publish(artifacts, stage="staging", reason=f"could not resolve/create project '{project_name}'")
+                return {}
 
-                logger.info(
-                    "Published %s '%s' to staging → %s",
-                    artifact_type, artifact_name, server_id,
-                )
+            for artifact in artifacts:
+                artifact_name = artifact.get("name", "unknown")
+                artifact_type = artifact.get("type", "workbook")
+                file_path = artifact.get("path", "") or ""
+                artifact_id = artifact.get("id") or str(uuid.uuid4())
 
-            except Exception as e:
-                logger.error("Failed to publish %s: %s", artifact_name, e)
-                op = PublishOperation(
-                    id=str(uuid.uuid4()),
-                    job_id=self.job.id,
-                    artifact_id=artifact.get("id") or str(uuid.uuid4()),
-                    environment="staging",
-                    remote_id="",
-                    remote_project_id="_migration_staging",
-                    operation="publish_staging",
-                    idempotency_key=f"pub_staging_fail_{self.job.id}_{artifact_name}_{uuid.uuid4().hex[:6]}",
-                    status="failed",
-                    error_message=str(e)[:1000],
-                )
-                self.db.add(op)
+                if not file_path or not os.path.exists(file_path):
+                    self._record_failed_publish(
+                        [artifact], stage="staging",
+                        reason=f"artifact file not found: {file_path}",
+                    )
+                    continue
 
-        self.db.commit()
+                try:
+                    if artifact_type == "datasource":
+                        ds_item = server.datasources.Resource()
+                        ds_item.project_id = project_id
+                        ds_item.name = artifact_name
+                        new_ds = server.datasources.publish(ds_item, file_path, server.PublishMode.Overwrite)
+                        server_id = new_ds.id
+                    else:
+                        wb_item = server.workbooks.Resource()
+                        wb_item.project_id = project_id
+                        wb_item.name = artifact_name
+                        new_wb = server.workbooks.publish(wb_item, file_path, server.PublishMode.Overwrite)
+                        server_id = new_wb.id
+
+                    published[artifact_name] = server_id
+
+                    # Record the REAL publish operation
+                    op = PublishOperation(
+                        id=str(uuid.uuid4()),
+                        job_id=self.job.id,
+                        artifact_id=artifact_id,
+                        environment="staging",
+                        remote_id=server_id,
+                        remote_project_id=project_id or "_migration_staging",
+                        operation="publish_staging",
+                        idempotency_key=f"pub_staging_{self.job.id}_{artifact_name}",
+                        status="success",
+                    )
+                    self.db.add(op)
+                    logger.info("Published %s '%s' to staging → remote_id=%s", artifact_type, artifact_name, server_id)
+
+                except Exception as e:
+                    logger.error("Failed to publish %s '%s': %s", artifact_type, artifact_name, e)
+                    op = PublishOperation(
+                        id=str(uuid.uuid4()),
+                        job_id=self.job.id,
+                        artifact_id=artifact_id,
+                        environment="staging",
+                        remote_id="",
+                        remote_project_id="_migration_staging",
+                        operation="publish_staging",
+                        idempotency_key=f"pub_staging_fail_{self.job.id}_{artifact_name}_{uuid.uuid4().hex[:6]}",
+                        status="failed",
+                        error_message=str(e)[:1000],
+                    )
+                    self.db.add(op)
+
+        finally:
+            self.db.commit()
+
         return published
 
     async def promote_to_production(
@@ -129,83 +205,173 @@ class PublishAgent:
             return {}
 
         config = tableau_config or {}
-        target_project = config.get("target_project", "Migrated")
+        project_prod_name = (config.get("target_project") or "Migrated")
+        try:
+            server, auth, site_id = _build_tableau_auth(config)
+            server.auth.sign_in(auth)
+        except ValueError as ve:
+            logger.warning("Production promotion skipped (fail-closed): %s", ve)
+            self._record_blocked_promotion(scorecard, reason=str(ve))
+            return {}
+        except Exception as e:
+            logger.error("Production promotion sign-in failed (fail-closed): %s", e)
+            self._record_blocked_promotion(scorecard, reason=f"sign_in failed: {e}")
+            return {}
 
-        promoted = {}
+        try:
+            project_id = _resolve_project(server, site_id, project_prod_name)
+            if not project_id:
+                self._record_blocked_promotion(scorecard, reason=f"could not resolve/create project '{project_prod_name}'")
+                return {}
 
-        for artifact_name, staging_id in staging_ids.items():
+            promoted = {}
+
+            for artifact_name, staging_id in staging_ids.items():
+                try:
+                    # Real promotion = re-publish the production artifact.
+                    # The file path is recovered from the DB record for this staging id.
+                    file_path = self._artifact_file_path(staging_id)
+                    if not file_path or not os.path.exists(file_path):
+                        raise FileNotFoundError(f"staging artifact file not found: {file_path}")
+
+                    wb_item = server.workbooks.Resource()
+                    wb_item.project_id = project_id
+                    wb_item.name = artifact_name
+                    new_wb = server.workbooks.publish(wb_item, file_path, server.PublishMode.Overwrite)
+                    prod_id = new_wb.id
+                    promoted[artifact_name] = prod_id
+
+                    op = PublishOperation(
+                        id=str(uuid.uuid4()),
+                        job_id=self.job.id,
+                        artifact_id=staging_id,
+                        environment="production",
+                        remote_id=prod_id,
+                        remote_project_id=project_prod_name,
+                        operation="promote_production",
+                        idempotency_key=f"promote_prod_{self.job.id}_{artifact_name}",
+                        status="success",
+                    )
+                    self.db.add(op)
+
+                    xref = CrossReference(
+                        id=str(uuid.uuid4()),
+                        job_id=self.job.id,
+                        mstr_id=artifact_name,
+                        mstr_name=artifact_name,
+                        mstr_type="workbook",
+                        tableau_workbook_id=prod_id,
+                        tableau_workbook_name=artifact_name,
+                        tableau_project=project_prod_name,
+                    )
+                    self.db.add(xref)
+
+                    logger.info("Promoted '%s' to production → remote_id=%s", artifact_name, prod_id)
+
+                except Exception as e:
+                    logger.error("Failed to promote %s: %s", artifact_name, e)
+                    op = PublishOperation(
+                        id=str(uuid.uuid4()),
+                        job_id=self.job.id,
+                        artifact_id=staging_id,
+                        environment="production",
+                        remote_id="",
+                        remote_project_id=project_prod_name,
+                        operation="promote_production",
+                        idempotency_key=f"promote_prod_fail_{self.job.id}_{artifact_name}",
+                        status="failed",
+                        error_message=str(e)[:1000],
+                    )
+                    self.db.add(op)
+
+            self.db.commit()
+            return promoted
+        finally:
             try:
-                prod_id = str(uuid.uuid4())
-                promoted[artifact_name] = prod_id
+                server.auth.sign_out()
+            except Exception:
+                pass
 
-                # Record publish operation
-                op = PublishOperation(
-                    id=str(uuid.uuid4()),
-                    job_id=self.job.id,
-                    artifact_id=staging_id,
-                    environment="production",
-                    remote_id=prod_id,
-                    remote_project_id=target_project,
-                    operation="promote_production",
-                    idempotency_key=f"promote_prod_{self.job.id}_{artifact_name}",
-                    status="success",
-                )
-                self.db.add(op)
-
-                # Record cross-reference
-                xref = CrossReference(
-                    id=str(uuid.uuid4()),
-                    job_id=self.job.id,
-                    mstr_id=artifact_name,
-                    mstr_name=artifact_name,
-                    mstr_type="workbook",
-                    tableau_workbook_id=prod_id,
-                    tableau_workbook_name=artifact_name,
-                    tableau_project=target_project,
-                )
-                self.db.add(xref)
-
-                logger.info("Promoted '%s' to production → %s", artifact_name, prod_id)
-
-            except Exception as e:
-                logger.error("Failed to promote %s: %s", artifact_name, e)
-
-        self.db.commit()
-        return promoted
-
-    async def reconcile(self, promoted_ids: dict[str, str]) -> bool:
+    async def reconcile(
+        self,
+        promoted_ids: dict[str, str],
+        tableau_config: Optional[dict] = None,
+    ) -> bool:
         """
-        Post-promotion reconciliation: verify production publish via REST.
+        Post-promotion reconciliation via the Tableau REST API (TSC).
 
-        Compares content hashes between local artifacts and published versions.
+        HONESTY GUARD: Reconcile verifies the published workbook actually exists
+        and is reachable on the server. If the server/PAT is not configured, or
+        the content cannot be fetched, the event is recorded as FAILED (fail-closed)
+        — never a self-invented "verified".
         """
+        config = tableau_config or {}
         all_ok = True
+        server = None
 
-        for name, content_id in promoted_ids.items():
-            try:
-                event = ReconciliationEvent(
-                    id=str(uuid.uuid4()),
-                    job_id=self.job.id,
-                    event_type="post_promotion_verify",
-                    target_entity_id=content_id,
-                    environment="production",
-                    details={"content_name": name, "status": "verified"},
-                )
-                self.db.add(event)
+        try:
+            server, auth, site_id = _build_tableau_auth(config)
+            server.auth.sign_in(auth)
 
-            except Exception as e:
-                all_ok = False
-                event = ReconciliationEvent(
+            # Fetch published workbooks once and index by name for lookup.
+            all_wbs, _pager = server.workbooks.get()
+            wb_by_name = {w.name: w for w in all_wbs}
+
+            for name, content_id in promoted_ids.items():
+                try:
+                    found = wb_by_name.get(name)
+                    # Best-effort: also confirm by id if name lookup misses.
+                    if found is None:
+                        try:
+                            found = server.workbooks.get_by_id(content_id)
+                        except Exception:
+                            found = None
+                    verified = found is not None
+                    status = "verified" if verified else "not_found"
+                    event = ReconciliationEvent(
+                        id=str(uuid.uuid4()),
+                        job_id=self.job.id,
+                        event_type="post_promotion_verify",
+                        target_entity_id=content_id,
+                        environment="production",
+                        details={"content_name": name, "status": status},
+                    )
+                    self.db.add(event)
+                    if not verified:
+                        all_ok = False
+                except Exception as e:
+                    all_ok = False
+                    event = ReconciliationEvent(
+                        id=str(uuid.uuid4()),
+                        job_id=self.job.id,
+                        event_type="post_promotion_verify",
+                        target_entity_id=content_id,
+                        environment="production",
+                        details={"content_name": name, "status": "failed", "error": str(e)[:500]},
+                    )
+                    self.db.add(event)
+
+        except (ValueError, Exception) as e:
+            # Auth/config/reachability failure → every pending reconciliation fails closed.
+            logger.error("Reconciliation failed (fail-closed): %s", e)
+            for name, content_id in promoted_ids.items():
+                self.db.add(ReconciliationEvent(
                     id=str(uuid.uuid4()),
                     job_id=self.job.id,
                     event_type="post_promotion_verify",
                     target_entity_id=content_id,
                     environment="production",
                     details={"content_name": name, "status": "failed", "error": str(e)[:500]},
-                )
-                self.db.add(event)
+                ))
+            all_ok = False
 
-        self.db.commit()
+        finally:
+            self.db.commit()
+            if server is not None:
+                try:
+                    server.auth.sign_out()
+                except Exception:
+                    pass
         return all_ok
 
     async def rollback_staging(self, staging_ids: dict[str, str]):
@@ -231,8 +397,16 @@ class PublishAgent:
 
         self.db.commit()
 
-    def _record_blocked_promotion(self, scorecard):
-        """Record that promotion was blocked by scorecard."""
+    def _record_blocked_promotion(self, scorecard, reason: Optional[str] = None):
+        """Record that promotion was blocked by scorecard or fail-closed config."""
+        msg = (
+            f"Scorecard failed: security={scorecard.security_confidence:.2f}, "
+            f"kpi={scorecard.financial_kpi_confidence:.2f}, "
+            f"structural={scorecard.structural_confidence:.2f}, "
+            f"blockers={scorecard.blocker_issues}"
+        )
+        if reason:
+            msg = f"{msg} | reason: {reason}"
         op = PublishOperation(
             id=str(uuid.uuid4()),
             job_id=self.job.id,
@@ -242,12 +416,30 @@ class PublishAgent:
             operation="promote_blocked",
             idempotency_key=f"promote_blocked_{self.job.id}_{uuid.uuid4().hex[:6]}",
             status="blocked",
-            error_message=(
-                f"Scorecard failed: security={scorecard.security_confidence:.2f}, "
-                f"kpi={scorecard.financial_kpi_confidence:.2f}, "
-                f"structural={scorecard.structural_confidence:.2f}, "
-                f"blockers={scorecard.blocker_issues}"
-            ),
+            error_message=msg,
         )
         self.db.add(op)
         self.db.commit()
+
+    def _record_failed_publish(self, artifacts: list[dict], stage: str, reason: str):
+        """Record a failed publish for each artifact (fail-closed; never fake success)."""
+        for artifact in artifacts:
+            self.db.add(PublishOperation(
+                id=str(uuid.uuid4()),
+                job_id=self.job.id,
+                artifact_id=artifact.get("id") or str(uuid.uuid4()),
+                environment=stage,
+                remote_id="",
+                remote_project_id="_migration_staging" if stage == "staging" else "production",
+                operation=f"publish_{stage}",
+                idempotency_key=f"publish_{stage}_fail_closed_{self.job.id}_{uuid.uuid4().hex[:6]}",
+                status="failed",
+                error_message=reason[:1000],
+            ))
+        self.db.commit()
+
+    def _artifact_file_path(self, artifact_id: str) -> str:
+        """Recover the local artifact file path for a staging DB artifact id."""
+        from app.models.objects import Artifact
+        art = self.db.query(Artifact).filter(Artifact.id == artifact_id).first()
+        return (art.artifact_path if art and art.artifact_path else "") or ""

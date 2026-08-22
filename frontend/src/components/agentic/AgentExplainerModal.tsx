@@ -11,6 +11,7 @@ import {
   Code,
   ShieldCheck,
   Check,
+  RefreshCw,
 } from 'lucide-react';
 import { api } from '../../api';
 
@@ -39,6 +40,7 @@ export const AgentExplainerModal: React.FC<AgentExplainerModalProps> = ({
   onApplyCalc,
 }) => {
   const [loadingExplanation, setLoadingExplanation] = useState(true);
+  const [explanationError, setExplanationError] = useState<string | null>(null);
   const [reasoning, setReasoning] = useState('');
   const [astBreakdown, setAstBreakdown] = useState<string[]>([]);
   const [tradeoffs, setTradeoffs] = useState('');
@@ -47,37 +49,57 @@ export const AgentExplainerModal: React.FC<AgentExplainerModalProps> = ({
   // Interactive Re-prompting state
   const [userPrompt, setUserPrompt] = useState('');
   const [retranslating, setRetranslating] = useState(false);
+  const [retranslateError, setRetranslateError] = useState<string | null>(null);
   const [revisedResult, setRevisedResult] = useState<{
     calc: string;
     confidence: number;
     notes: string;
   } | null>(null);
 
-  useEffect(() => {
-    if (isOpen) {
-      setLoadingExplanation(true);
-      api.explainTranslation({
+  const fetchExplanation = React.useCallback(async () => {
+    setLoadingExplanation(true);
+    setExplanationError(null);
+    try {
+      const res = await api.explainTranslation({
         name: objectName,
         source_formula: sourceFormula,
         target_calc: currentTargetCalc,
-      })
-        .then((res: any) => {
-          setReasoning(res.reasoning || '');
-          setAstBreakdown(res.ast_breakdown || []);
-          setTradeoffs(res.tradeoffs || '');
-          setAlternatives(res.alternatives || []);
-          setLoadingExplanation(false);
-        })
-        .catch(() => setLoadingExplanation(false));
+      });
+      setReasoning(res.reasoning || '');
+      setAstBreakdown(res.ast_breakdown || []);
+      setTradeoffs(res.tradeoffs || '');
+      const rawAlts = res.alternatives || [];
+      const mappedAlternatives: AlternativeCandidate[] = rawAlts.map((a: any, idx: number) => ({
+        title: a.title || a.name || `Alternative Strategy ${idx + 1}`,
+        calc: a.calc || a.formula || '',
+        confidence: typeof a.confidence === 'number' ? a.confidence : 0.8,
+        reason: a.reason || a.notes || 'Alternative translation evaluated by agent',
+      }));
+      setAlternatives(mappedAlternatives);
+    } catch (err: any) {
+      setExplanationError(
+        err?.message || 'Unable to load AI explanation from backend (/agent/explain).'
+      );
+    } finally {
+      setLoadingExplanation(false);
+    }
+  }, [objectName, sourceFormula, currentTargetCalc]);
+
+  useEffect(() => {
+    if (isOpen) {
+      fetchExplanation();
     } else {
       setUserPrompt('');
       setRevisedResult(null);
+      setExplanationError(null);
+      setRetranslateError(null);
     }
-  }, [isOpen, objectName, sourceFormula, currentTargetCalc]);
+  }, [isOpen, fetchExplanation]);
 
   const handleRetranslate = async () => {
     if (!userPrompt.trim()) return;
     setRetranslating(true);
+    setRetranslateError(null);
     try {
       const res = await api.retranslateWithAI({
         name: objectName,
@@ -90,8 +112,8 @@ export const AgentExplainerModal: React.FC<AgentExplainerModalProps> = ({
         confidence: res.confidence,
         notes: res.agent_notes,
       });
-    } catch (e) {
-      alert('Failed to retranslate with AI agent');
+    } catch (e: any) {
+      setRetranslateError(e?.message || 'Failed to retranslate with AI agent (/agent/retranslate).');
     } finally {
       setRetranslating(false);
     }
@@ -199,11 +221,48 @@ export const AgentExplainerModal: React.FC<AgentExplainerModalProps> = ({
             </div>
           </div>
 
-          {/* Loading / Chain of Thought Rationale */}
+          {/* Loading / Error / Chain of Thought Rationale */}
           {loadingExplanation ? (
             <div style={{ padding: '30px', textAlign: 'center', color: 'var(--ink-2)' }}>
               <Loader2 size={24} className="spin-icon" style={{ margin: '0 auto 10px auto' }} color="var(--primary)" />
               <p style={{ fontSize: '0.8125rem' }}>Agent is analyzing AST dimensionality and translation tradeoffs...</p>
+            </div>
+          ) : explanationError ? (
+            <div
+              style={{
+                padding: '16px',
+                background: 'rgba(239, 68, 68, 0.08)',
+                borderRadius: 'var(--radius-md)',
+                border: '1px solid rgba(239, 68, 68, 0.25)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '10px',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--red)' }}>
+                <AlertTriangle size={18} />
+                <strong style={{ fontSize: '0.875rem' }}>AI Explanation Unavailable</strong>
+              </div>
+              <p style={{ fontSize: '0.8125rem', color: 'var(--ink-2)', margin: 0, lineHeight: 1.5 }}>
+                {explanationError}
+              </p>
+              <div>
+                <button
+                  type="button"
+                  onClick={fetchExplanation}
+                  className="btn btn-secondary"
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    padding: '6px 12px',
+                    fontSize: '0.75rem',
+                  }}
+                >
+                  <RefreshCw size={13} />
+                  <span>Retry Explanation</span>
+                </button>
+              </div>
             </div>
           ) : (
             <>
@@ -213,7 +272,7 @@ export const AgentExplainerModal: React.FC<AgentExplainerModalProps> = ({
                   Agent Translation Rationale
                 </h4>
                 <p style={{ fontSize: '0.8125rem', color: 'var(--ink-2)', lineHeight: 1.5, margin: 0 }}>
-                  {reasoning}
+                  {reasoning || 'No specific rationale returned by backend agent.'}
                 </p>
               </div>
 
@@ -312,6 +371,27 @@ export const AgentExplainerModal: React.FC<AgentExplainerModalProps> = ({
                     <span>Re-Translate</span>
                   </button>
                 </div>
+
+                {/* Retranslate Error Alert */}
+                {retranslateError && (
+                  <div
+                    style={{
+                      marginTop: '10px',
+                      padding: '10px 12px',
+                      background: 'rgba(239, 68, 68, 0.08)',
+                      borderRadius: 'var(--radius-sm)',
+                      border: '1px solid rgba(239, 68, 68, 0.25)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                      color: 'var(--red)',
+                      fontSize: '0.75rem',
+                    }}
+                  >
+                    <AlertTriangle size={14} style={{ flexShrink: 0 }} />
+                    <span>{retranslateError}</span>
+                  </div>
+                )}
 
                 {/* Revised Translation Output */}
                 {revisedResult && (

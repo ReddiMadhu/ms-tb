@@ -3,7 +3,9 @@ Pytest configuration and shared test fixtures for mstr-tableau-migrator.
 """
 
 import os
+import shutil
 import sys
+import uuid
 from pathlib import Path
 
 import pytest
@@ -40,6 +42,24 @@ def fixture_db_session():
     finally:
         session.close()
         Base.metadata.drop_all(bind=engine)
+
+
+@pytest.fixture
+def tmp_path():
+    """
+    Sandbox-safe replacement for pytest's built-in tmp_path.
+
+    The DSH file sandbox intermittently denies pytest's numbered-dir factory
+    (mkdir/listdir under both %TEMP% and --basetemp), which errored every
+    tmp_path-consuming test at setup regardless of code health. Tests here only
+    need a scratch directory for pipeline artifacts, so we back it with plain
+    os.makedirs under the workspace — an operation proven to work.
+    """
+    base = Path(__file__).resolve().parent.parent / "artifacts" / "test-runs"
+    scratch = base / uuid.uuid4().hex
+    scratch.mkdir(parents=True, exist_ok=True)
+    yield scratch
+    shutil.rmtree(scratch, ignore_errors=True)
 
 
 @pytest.fixture(name="client")

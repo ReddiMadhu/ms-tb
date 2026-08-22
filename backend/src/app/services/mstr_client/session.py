@@ -321,6 +321,9 @@ class MSTRSession:
         resp = self.get(f"/api/dossiers/{dossier_id}/instances/{instance_id}")
         return resp.json()
 
+    # Alias used by the orchestrator's formula harvester (same endpoint).
+    get_dossier_instance = get_dossier_instance_details
+
     def get_visualization_definition(
         self,
         dossier_id: str,
@@ -331,6 +334,25 @@ class MSTRSession:
         """GET /api/dossiers/{id}/instances/{iid}/chapters/{ch}/visualizations/{vk} — get specific visual definition."""
         resp = self.get(
             f"/api/dossiers/{dossier_id}/instances/{instance_id}/chapters/{chapter_key}/visualizations/{visualization_key}"
+        )
+        return resp.json()
+
+    def get_visualization_definition_v2(
+        self,
+        dossier_id: str,
+        instance_id: str,
+        chapter_key: str,
+        visualization_key: str,
+    ) -> dict:
+        """
+        GET /api/v2/dossiers/{id}/instances/{iid}/chapters/{ch}/visualizations/{vk}
+
+        V2 variant required for cross-tabs, subtotal grids, and compound grids,
+        which the V1 endpoint rejects with iServerCode -2147171504 /
+        -2147171501 or ERR006 ("use /api/v2/...").
+        """
+        resp = self.get(
+            f"/api/v2/dossiers/{dossier_id}/instances/{instance_id}/chapters/{chapter_key}/visualizations/{visualization_key}"
         )
         return resp.json()
 
@@ -426,9 +448,21 @@ class MSTRSession:
     # ── VLDB Settings ───────────────────────────────────────────
 
     def get_vldb_settings(self, project_id: Optional[str] = None) -> dict:
-        """GET /api/model/vldbProperties — project-level VLDB configuration."""
-        resp = self.get("/api/model/vldbProperties")
-        return resp.json()
+        """
+        GET /api/model/vldbProperties — project-level VLDB configuration.
+
+        Falls back to /api/model/vldbSettings (the endpoint named in the spec)
+        when vldbProperties is not enabled on the environment (404).
+        """
+        try:
+            resp = self.get("/api/model/vldbProperties")
+            return resp.json()
+        except MSTRAPIError as e:
+            if e.status_code == 404:
+                logger.info("vldbProperties not available — trying spec endpoint /api/model/vldbSettings")
+                resp = self.get("/api/model/vldbSettings")
+                return resp.json()
+            raise
 
     # ── Cleanup ─────────────────────────────────────────────────
 

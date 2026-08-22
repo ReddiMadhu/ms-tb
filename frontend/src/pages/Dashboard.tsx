@@ -24,33 +24,39 @@ export default function Dashboard() {
   const navigate = useNavigate();
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
 
-  const fetchJobs = () => {
-    api.listJobs()
-      .then((res) => {
-        setJobs(res.jobs || []);
-        setLoading(false);
-      })
-      .catch(() => {
-        setLoading(false);
-      });
-  };
+  const fetchJobs = React.useCallback(async () => {
+    try {
+      const res = await api.listJobs();
+      setJobs(res.jobs || []);
+      setError(null);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to connect to migration backend API';
+      setError(message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   const activeJobs = jobs.filter((j) => ['RUNNING', 'PENDING', 'PROMOTING'].includes(j.status)).length;
 
   useEffect(() => {
     fetchJobs();
+  }, [fetchJobs]);
 
-    // If jobs are loaded and none are currently active in-flight, stop background polling
-    if (jobs.length > 0 && activeJobs === 0) {
-      return;
-    }
+  useEffect(() => {
+    // Only poll when active jobs are in-flight (10s interval as per spec)
+    if (activeJobs === 0) return;
 
-    const interval = setInterval(fetchJobs, 6000);
+    const interval = setInterval(() => {
+      fetchJobs();
+    }, 10000);
+
     return () => clearInterval(interval);
-  }, [activeJobs, jobs.length]);
+  }, [activeJobs, fetchJobs]);
 
   // Compute KPI metrics
   const totalJobs = jobs.length;
@@ -210,6 +216,48 @@ export default function Dashboard() {
         </div>
       </div>
 
+      {/* ── Error Banner (When cached jobs exist) ──────────────── */}
+      {error && jobs.length > 0 && (
+        <div
+          style={{
+            padding: '12px 16px',
+            marginBottom: '16px',
+            background: 'var(--red-tint, rgba(239, 68, 68, 0.1))',
+            border: '1px solid var(--red, #ef4444)',
+            borderRadius: 'var(--radius-md)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '12px',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <AlertTriangle size={16} color="var(--red, #ef4444)" />
+            <span style={{ fontSize: '0.8125rem', color: 'var(--ink)' }}>
+              <strong>Sync Warning:</strong> {error}
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setLoading(true);
+              fetchJobs();
+            }}
+            className="btn btn-secondary"
+            style={{
+              padding: '4px 10px',
+              fontSize: '0.75rem',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px',
+            }}
+          >
+            <RefreshCw size={12} />
+            <span>Retry</span>
+          </button>
+        </div>
+      )}
+
       {/* ── Jobs Table / Empty State ────────────────────────────── */}
       {loading && jobs.length === 0 ? (
         <div
@@ -226,6 +274,18 @@ export default function Dashboard() {
             Loading migration catalog...
           </p>
         </div>
+      ) : error && jobs.length === 0 ? (
+        <EmptyState
+          icon={AlertTriangle}
+          title="Backend Connection Failed"
+          description={`Unable to reach the backend migration service: ${error}. Verify that the backend server is running and reachable.`}
+          actionLabel="Retry Connection"
+          onAction={() => {
+            setLoading(true);
+            fetchJobs();
+          }}
+          actionIcon={<RefreshCw size={16} />}
+        />
       ) : filteredJobs.length === 0 ? (
         <EmptyState
           icon={FolderKanban}

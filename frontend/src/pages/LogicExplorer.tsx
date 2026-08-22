@@ -119,12 +119,6 @@ export default function LogicExplorer() {
 
   useEffect(() => {
     loadCalculations();
-
-    const interval = setInterval(() => {
-      loadCalculations();
-    }, 3000);
-
-    return () => clearInterval(interval);
   }, [loadCalculations]);
 
   const filteredConversions = useMemo(() => {
