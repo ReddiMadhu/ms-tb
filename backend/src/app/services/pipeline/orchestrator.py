@@ -619,10 +619,58 @@ class PipelineOrchestrator:
                                         else:
                                             raise
                                     res = v_detail.get("result", {}).get("definition", {}) or v_detail.get("definition", {})
+
+                                    # Persist the RAW definition so shelf evidence is
+                                    # auditable (and re-parseable) offline — silent
+                                    # empties here are how wrong-chart regressions
+                                    # were born.
+                                    try:
+                                        vdefs_dir = os.path.join(artifacts_dir, "visual_defs")
+                                        os.makedirs(vdefs_dir, exist_ok=True)
+                                        safe_key = "".join(c if c.isalnum() or c in "-_" else "_" for c in vz_key)
+                                        with open(os.path.join(vdefs_dir, f"{safe_key}.json"), "w", encoding="utf-8") as vf:
+                                            json.dump(v_detail, vf, indent=2, default=str)
+                                    except Exception as pe:
+                                        logger.warning("Could not persist visual definition for %s: %s", vz_key, pe)
+
+                                    def _named_object_lists(node, out=None):
+                                        """Collect every list of {name,id,...} dicts in
+                                        the response. Grid/crosstab/microchart V2
+                                        payloads bury shelves under varied keys
+                                        (metrics/attributes/rows/columns/axes...);
+                                        scanning keeps us shape-agnostic without
+                                        inventing bindings."""
+                                        if out is None:
+                                            out = {}
+                                        if isinstance(node, dict):
+                                            for k, v in node.items():
+                                                if isinstance(v, list) and v and isinstance(v[0], dict) and "name" in v[0]:
+                                                    out.setdefault(k, []).extend(v)
+                                                elif isinstance(v, (dict, list)):
+                                                    _named_object_lists(v, out)
+                                        elif isinstance(node, list):
+                                            for v in node[:50]:
+                                                _named_object_lists(v, out)
+                                        return out
+
                                     v_metrics = [m.get("name") for m in res.get("metrics", []) if m.get("name")]
                                     v_attrs = [a.get("name") for a in res.get("attributes", []) if a.get("name")]
                                     v_metric_ids = [m.get("id") for m in res.get("metrics", []) if m.get("id")]
                                     v_attr_ids = [a.get("id") for a in res.get("attributes", []) if a.get("id")]
+
+                                    if not v_metrics and not v_attrs:
+                                        lists = _named_object_lists(res)
+                                        for lk, lv in lists.items():
+                                            k_l = lk.lower()
+                                            names = [o.get("name") for o in lv if o.get("name")]
+                                            ids = [o.get("id") for o in lv if o.get("id")]
+                                            if any(t in k_l for t in ("metric", "measure")):
+                                                v_metrics.extend(n for n in names if n not in v_metrics)
+                                                v_metric_ids.extend(i for i in ids if i not in v_metric_ids)
+                                            elif any(t in k_l for t in ("attribute", "entity", "row", "column", "axis")):
+                                                v_attrs.extend(n for n in names if n not in v_attrs)
+                                                v_attr_ids.extend(i for i in ids if i not in v_attr_ids)
+
                                     num_format = res.get("metrics", [{}])[0].get("numberFormatting", {}) if res.get("metrics") else {}
                                     viz_meta_map[vz_key] = {
                                         "metrics": v_metrics,
@@ -757,16 +805,40 @@ class PipelineOrchestrator:
                         v_attr_ids = v_meta.get("attribute_ids", [])
                         v_format = v_meta.get("number_formatting", {})
 
-                        # Canonicalize metrics/attributes using MSTR GUIDs
+                        # Canonicalize metrics/attributes using MSTR GUIDs.
+                        # A binding that resolves NEITHER by GUID NOR by exact
+                        # IR name is a display artifact (e.g. microchart
+                        # 'Column Set 1') — dropped here so phantom fields can
+                        # never become shelf pills downstream.
+                        ir_name_set = {str(n).lower() for n in mstr_id_to_canonical.values()}
+
                         v_metrics = []
                         for i, mname in enumerate(v_metrics_raw):
                             mid = v_metric_ids[i] if i < len(v_metric_ids) else None
-                            v_metrics.append(mstr_id_to_canonical.get(mid) or mname)
+                            canon = mstr_id_to_canonical.get(mid)
+                            if canon:
+                                v_metrics.append(canon)
+                            elif mname and str(mname).strip().lower() in ir_name_set:
+                                v_metrics.append(mname)
+                            else:
+                                logger.info(
+                                    "Visual %s: dropping unresolvable metric binding '%s' (no GUID / exact IR match)",
+                                    viz_key, mname,
+                                )
 
                         v_attrs = []
                         for i, aname in enumerate(v_attrs_raw):
                             aid = v_attr_ids[i] if i < len(v_attr_ids) else None
-                            v_attrs.append(mstr_id_to_canonical.get(aid) or aname)
+                            canon = mstr_id_to_canonical.get(aid)
+                            if canon:
+                                v_attrs.append(canon)
+                            elif aname and str(aname).strip().lower() in ir_name_set:
+                                v_attrs.append(aname)
+                            else:
+                                logger.info(
+                                    "Visual %s: dropping unresolvable attribute binding '%s' (no GUID / exact IR match)",
+                                    viz_key, aname,
+                                )
 
                         # If rows/columns were not in selector, map directly from ground-truth instance definition
                         if not rows and not columns:
@@ -787,7 +859,10 @@ class PipelineOrchestrator:
                                 if v_attrs:
                                     color_field = v_attrs[0]
                                 if v_metrics:
-                                    columns = [v_metrics[0]]
+                                    # Angle belongs to Size encoding, NOT an
+                                    # axis pill — a metric on Columns renders
+                                    # a pie as detached bubbles on an axis.
+                                    size_field = v_metrics[0]
                             elif viz_type in ("line", "line_chart"):
                                 if v_attrs:
                                     columns = [v_attrs[0]]
@@ -950,6 +1025,48 @@ class PipelineOrchestrator:
         hyper_dir = os.path.join(artifacts_dir, "hyper")
         os.makedirs(hyper_dir, exist_ok=True)
 
+        def _verify_hyper_contract(path) -> tuple[bool, str]:
+            """The TWB binds ONE flattened table: [Extract].[Extract]. Any Hyper
+            file entering this pipeline MUST contain it — a cached legacy
+            extract or a half-written file otherwise ships a workbook that
+            fails in Tableau with 'extract does not contain a schema Extract'."""
+            if not os.path.exists(path):
+                return False, "file does not exist"
+            try:
+                from tableauhyperapi import HyperProcess, Telemetry, Connection
+                with HyperProcess(telemetry=Telemetry.DO_NOT_SEND_USAGE_DATA_TO_TABLEAU) as hp:
+                    with Connection(endpoint=hp.endpoint, database=str(path)) as conn:
+                        names = [
+                            f"{str(s).strip(chr(34))}.{tn.name.unescaped}"
+                            for s in conn.catalog.get_schema_names()
+                            for tn in conn.catalog.get_table_names(s)
+                        ]
+                        if "Extract.Extract" in names:
+                            return True, "contract satisfied"
+                        return False, f"tables found: {names or 'none'}"
+            except Exception as ve:
+                # Cannot verify HERE (lib missing / sandbox) — downstream
+                # emitter re-checks before packaging; don't block the build.
+                return True, f"verification unavailable: {ve}"
+
+        def _reject_bad_hyper(path, why: str):
+            from app.models.objects import Issue as IssueModel
+            db.add(IssueModel(
+                job_id=job.id,
+                object_id=job.id,
+                severity="blocker",
+                category="hyper",
+                message=(
+                    f"Hyper extract '{path}' violates the [Extract].[Extract] "
+                    f"contract ({why}). Workbook emission refused rather than "
+                    f"shipping a datasource Tableau cannot open."
+                ),
+            ))
+            db.commit()
+            raise RuntimeError(
+                f"Hyper contract violation for {path}: {why}"
+            )
+
         hyper_paths = {}
         hyper_file = os.path.join(hyper_dir, "extract.hyper")
 
@@ -978,8 +1095,15 @@ class PipelineOrchestrator:
                 logger.info("Found cached Hyper extract for cube '%s' at %s. Using instant cache...", cube.name, cache_path)
                 try:
                     shutil.copy(cache_path, hyper_file)
-                    cached_extract_found = True
-                    break
+                    ok, why = _verify_hyper_contract(hyper_file)
+                    if not ok:
+                        logger.warning(
+                            "Cached extract for cube '%s' violates [Extract].[Extract] "
+                            "contract (%s) — ignoring cache and rebuilding", cube.name, why,
+                        )
+                    else:
+                        cached_extract_found = True
+                        break
                 except Exception as c_err:
                     logger.warning("Cache copy failed: %s", c_err)
 
@@ -996,6 +1120,13 @@ class PipelineOrchestrator:
                     logger.info("Found direct source file at %s. Ingesting via DuckDB + PyArrow...", sc)
                     try:
                         agent.build_from_source_file(sc, Path(hyper_file))
+                        ok, why = _verify_hyper_contract(hyper_file)
+                        if not ok:
+                            logger.warning(
+                                "Source-ingested extract violates [Extract].[Extract] "
+                                "contract (%s) — ignoring and rebuilding", why,
+                            )
+                            continue
                         shutil.copy(hyper_file, cache_path)
                         cached_extract_found = True
                         break
@@ -1073,9 +1204,22 @@ class PipelineOrchestrator:
                     database=hyper_file,
                     create_mode=CreateMode.CREATE_AND_REPLACE,
                 ) as connection:
-                    # Build table definition from IR dimensions + measures with guaranteed unique column names
+                    # Build table definition from IR dimensions + measures with guaranteed unique column names.
+                    # Dimension columns are typed by their MSTR form data_type —
+                    # hard-coding text() here made numeric attributes like
+                    # Fraud Score land as TEXT while the TDS declared them
+                    # real, producing red-'!' broken pills in Tableau.
+                    def _dim_sql_type(dtype: str):
+                        d = str(dtype or "").lower()
+                        if d in ("integer", "bigint", "int"):
+                            return SqlType.int()
+                        if d in ("double", "real", "float", "numeric", "decimal"):
+                            return SqlType.double()
+                        return SqlType.text()
+
                     columns = []
                     seen_col_names = set()
+                    dim_types = []
                     for dim in ir_data.get("dimensions", []):
                         col_name = dim.get("local_name", dim.get("name", "dim"))
                         base_name = col_name
@@ -1084,7 +1228,9 @@ class PipelineOrchestrator:
                             col_name = f"{base_name} ({idx})"
                             idx += 1
                         seen_col_names.add(col_name)
-                        columns.append(TableDefinition.Column(col_name, SqlType.text()))
+                        dt = str(dim.get("data_type") or "").lower()
+                        dim_types.append(dt)
+                        columns.append(TableDefinition.Column(col_name, _dim_sql_type(dt)))
 
                     # ── MSTR-definition-driven physical/derived classification ──
                     # Join IR measures to their MSTR expression ASTs (semantic_bundle.json)
@@ -1172,10 +1318,26 @@ class PipelineOrchestrator:
                                 for r in live_extracted_rows:
                                     clean_row = []
 
-                                    # 1. Populate dimension columns by name lookup
-                                    for d in dims:
+                                    # 1. Populate dimension columns by name lookup,
+                                    #    coerced to the column's MSTR-declared type —
+                                    #    a numeric attribute must land as numbers,
+                                    #    never str()-flattened into text.
+                                    for d, dt in zip(dims, dim_types):
                                         val = _get_field_val(r, d.get("name"), d.get("local_name"), d.get("caption"), d.get("remote_name"))
-                                        clean_row.append(str(val) if val is not None and str(val).lower() != "none" else None)
+                                        if val is None or str(val).strip().lower() in ("", "none", "null", "nan"):
+                                            clean_row.append(None)
+                                        elif dt in ("integer", "bigint", "int"):
+                                            try:
+                                                clean_row.append(int(float(str(val).strip())))
+                                            except Exception:
+                                                clean_row.append(None)
+                                        elif dt in ("double", "real", "float", "numeric", "decimal"):
+                                            try:
+                                                clean_row.append(float(str(val).replace("$", "").replace(",", "").strip()))
+                                            except Exception:
+                                                clean_row.append(None)
+                                        else:
+                                            clean_row.append(str(val))
 
                                     # 2. Populate measure columns by name lookup with numeric coercion
                                     for m in measures:
@@ -1222,9 +1384,19 @@ class PipelineOrchestrator:
             row_count = len(live_extracted_rows)  # 0 when offline — we never fabricate rows
             logger.info("Hyper extract built: %s (%d columns, %d rows)", hyper_file, len(columns), row_count)
 
+            ok, why = _verify_hyper_contract(hyper_file)
+            if not ok:
+                _reject_bad_hyper(hyper_file, why)
+
         except Exception as e:
+            if "Hyper contract violation" in str(e):
+                raise  # blocker already recorded — fail the stage loudly
             logger.warning("Hyper build failed (non-fatal): %s", e)
             hyper_paths["default"] = os.path.join(hyper_dir, "extract.hyper")
+            # A failed build must never silently ship a stale or absent file.
+            ok, why = _verify_hyper_contract(hyper_paths["default"])
+            if not ok and "verification unavailable" not in why:
+                _reject_bad_hyper(hyper_paths["default"], f"build failed: {e}; {why}")
 
         # Persist hyper_paths
         paths_file = os.path.join(artifacts_dir, "hyper_paths.json")

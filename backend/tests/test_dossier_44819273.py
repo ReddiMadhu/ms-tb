@@ -51,9 +51,12 @@ def real_dossier_ir():
 
 
 def test_real_dossier_structure(real_dossier_ir):
-    """Verify that the real dossier has 20 dimensions, 33 measures, and 45 visuals across 5 pages."""
+    """Verify the real dossier structure: 20 dimensions, 31 measures, 45 visuals, 5 pages.
+    Measures: MSTR exports 33, but ADR-027 true-dedup merges two duplicate
+    aliases into their canonical survivors (Outstanding Exposure→Reserve,
+    Avg Claim→Avg Severity), journaled in merge_map.json → 31 survive."""
     assert len(real_dossier_ir.dimensions) == 20
-    assert len(real_dossier_ir.measures) == 33
+    assert len(real_dossier_ir.measures) == 31
     assert len(real_dossier_ir.visuals) == 45
 
     pages = set(v.page_name for v in real_dossier_ir.visuals if v.page_name)
@@ -74,11 +77,52 @@ def test_real_dossier_viz_plan_generation(real_dossier_ir):
     # Check that each dashboard has the correct number of worksheets
     dash_map = {d.name.strip(): d for d in viz_plan.dashboards}
     assert "Executive Summary" in dash_map
+    # TEN visuals carry NO MSTR bindings in the dossier export. They are
+    # rescued ONLY by the review-approved human binding artifact
+    # (artifacts/visual_binding_overrides.json) — never by code-side guessing.
+    # With that artifact present, every visual binds and lands on a dashboard,
+    # restoring MSTR's original per-page counts (16/10/7/7/5).
+    failed = [ws.name for ws in viz_plan.worksheets if ws.is_failed]
+    assert failed == [], f"unbound visuals not covered by human overrides: {failed}"
+    total_bound = sum(len(d.worksheets) for d in viz_plan.dashboards)
+    assert total_bound == len(viz_plan.worksheets) == 45
     assert len(dash_map["Executive Summary"].worksheets) == 16
 
     # Verify no worksheet has an invalid mark type
     for ws in viz_plan.worksheets:
         assert ws.mark_type in ("text", "bar", "pie", "line", "circle", "square", "automatic", "map")
+
+
+def test_human_overrides_bind_evidenceless_visuals(real_dossier_ir):
+    """The 10 evidence-less visuals must be bound EXACTLY as transcribed in
+    visual_binding_overrides.json — verbatim human decisions, not inference."""
+    agent = VisualizationAgent(ir=real_dossier_ir)
+    viz_plan = agent.plan()
+    ws_map = {ws.name.strip().lower(): ws for ws in viz_plan.worksheets}
+
+    cov = ws_map["coverage loss drivers"]
+    assert not cov.is_failed and cov.mark_type == "bar"
+    assert [r.name for r in cov.rows] == ["Coverage"]
+    assert [c.name for c in cov.columns] == ["Total Incurred USD"]
+    assert [c.field_type for c in cov.columns] == ["measure"]
+
+    lob = ws_map["line of business mix"]
+    assert lob.rows[0].name == "Line of Business"
+    assert lob.columns[0].name == "Total Incurred USD"
+
+    heat = ws_map["region loss heat ranking"]
+    assert heat.mark_type == "square"
+    assert heat.color.name == "Total Incurred USD"
+
+    vol = ws_map["claim volume by region"]
+    assert vol.columns[0].name == "Count (Claim ID)"   # never Count (Region)
+
+    wl = ws_map["workload by adjusters"]
+    assert wl.mark_type == "text"
+    assert wl.rows[0].name == "Adjuster Name"
+    assert [c.name for c in wl.columns] == [
+        "Count (Claim ID)", "Avg_Claim_Resolution_Days",
+    ]
 
 
 def test_real_dossier_shelf_assignment_validity(real_dossier_ir):
@@ -169,7 +213,8 @@ async def test_real_dossier_tableau_emitter_twb_xml(db_session, tmp_path, real_d
         formula = calc_elem.get("formula")
         assert formula is not None and len(formula.strip()) > 0
 
-    # 2. Check all 45 Worksheets
+    # 2. Check all Worksheets — human binding overrides rescue the 10
+    # evidence-less visuals, so all 45 planned worksheets are emitted.
     worksheets = root.findall(".//worksheets/worksheet")
     assert len(worksheets) == 45
 

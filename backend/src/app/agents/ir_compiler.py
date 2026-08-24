@@ -340,6 +340,24 @@ class IRCompilerAgent:
             local_name = self._make_local_name(dim.name)
             remote_name = self._normalize_identifier(f"{dim.name}_DESC") if dim.desc_form else self._normalize_identifier(f"{dim.name}_ID")
 
+            # Resolve data type from the dimension's MSTR form definition.
+            # The semantic bundle stores the authoritative type in
+            # dim.forms[0].data_type (e.g. "integer", "double", "date").
+            # Falling back to "string" only when no form is available.
+            dim_data_type = "string"
+            forms = getattr(dim, "forms", None) or []
+            if forms:
+                # Prefer the ID (primary-key) form's data type; fall back to
+                # the first form if no PK form is marked.
+                pk_form = next((f for f in forms if getattr(f, "is_pk", False)), None)
+                source_form = pk_form or (forms[0] if forms else None)
+                if source_form:
+                    raw_type = getattr(source_form, "data_type", None)
+                    if isinstance(raw_type, str):
+                        dim_data_type = raw_type.lower()
+                    elif isinstance(source_form, dict):
+                        dim_data_type = str(source_form.get("data_type", "string")).lower()
+
             ir_dim = IRDimension(
                 id=str(uuid.uuid4()),
                 mstr_id=dim.mstr_id,
@@ -347,7 +365,7 @@ class IRCompilerAgent:
                 local_name=local_name,
                 remote_name=remote_name,
                 caption=dim.name,
-                data_type="string",
+                data_type=dim_data_type,
             )
             ir.dimensions.append(ir_dim)
 

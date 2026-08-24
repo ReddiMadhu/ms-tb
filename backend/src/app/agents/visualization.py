@@ -1,13 +1,15 @@
 """
-VisualizationAgent — Viz type mapping and shelf planning.
+VisualizationAgent â€” Viz type mapping and shelf planning.
 
-Ref: spec/agents.md §Agent 6
+Ref: spec/agents.md Â§Agent 6
 
 Maps MSTR visualization types to Tableau mark types
 and generates WorksheetSpec/DashboardSpec for the emitter.
 """
 
+import json
 import logging
+import os
 import re
 import uuid
 from dataclasses import dataclass, field
@@ -97,7 +99,7 @@ class WorksheetSpec:
 
 @dataclass
 class DashboardSpec:
-    """Dashboard specification — maps to MSTR chapter/page."""
+    """Dashboard specification â€” maps to MSTR chapter/page."""
     id: str
     name: str
     worksheets: list[str] = field(default_factory=list)  # worksheet names
@@ -124,6 +126,113 @@ class VisualizationAgent:
         self._used_kpi_measures = set()
         # Build canonical field name index for resolution
         self._field_index = self._build_field_index(ir)
+        # Canonical names by object kind â€” override refs must be typed exactly
+        self._measure_names = set()
+        for m in getattr(ir, "measures", []):
+            for k in (getattr(m, "local_name", ""), getattr(m, "caption", ""), getattr(m, "name", "")):
+                if k:
+                    self._measure_names.add(k.lower().strip())
+        self._dimension_names = set()
+        for d in getattr(ir, "dimensions", []):
+            for k in (getattr(d, "local_name", ""), getattr(d, "caption", ""), getattr(d, "name", "")):
+                if k:
+                    self._dimension_names.add(k.lower().strip())
+        # Human-supplied bindings (review-approved artifact), applied ONLY to
+        # visuals that carry no MicroStrategy evidence of their own.
+        self._binding_overrides = self._load_binding_overrides()
+
+    OVERRIDE_PATH = os.path.join(
+        os.path.dirname(__file__), "..", "..", "..",
+        "artifacts", "visual_binding_overrides.json",
+    )
+    _ALLOWED_OVERRIDE_MARKS = {
+        "text", "bar", "pie", "line", "circle", "square", "automatic", "map",
+    }
+
+    @classmethod
+    def _load_binding_overrides(cls) -> dict:
+        """Load the human-curated binding artifact. Absent file = no overrides;
+        malformed file = loud warning + no overrides (never partial trust)."""
+        try:
+            with open(cls.OVERRIDE_PATH, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+        except FileNotFoundError:
+            return {}
+        except Exception as e:
+            logger.warning("Could not read visual binding overrides: %s", e)
+            return {}
+        return {
+            str(k).strip().lower(): v
+            for k, v in raw.items()
+            if not str(k).startswith("_") and isinstance(v, dict)
+        }
+
+    def _apply_human_override(self, ws: WorksheetSpec) -> bool:
+        """Apply a review-board-approved binding to an evidence-less visual.
+        Every field must resolve EXACTLY against the IR inventory; one unknown
+        field rejects the whole override (the visual stays honestly failed)."""
+        spec = self._binding_overrides.get(ws.name.strip().lower())
+        if not spec:
+            return False
+
+        def resolve_ref(name: str):
+            resolved = self._resolve_field_name(str(name))
+            key = resolved.lower().strip()
+            if key in self._measure_names:
+                return FieldRef(name=resolved, field_type="measure")
+            if key in self._dimension_names:
+                return FieldRef(name=resolved, field_type="dimension")
+            logger.warning(
+                "Override for '%s': field '%s' has no exact IR match â€” override REJECTED",
+                ws.name, name,
+            )
+            return None
+
+        def shelf(key: str):
+            vals = spec.get(key) or []
+            if isinstance(vals, str):
+                vals = [vals]
+            out = []
+            for v in vals:
+                ref = resolve_ref(v)
+                if ref is None:
+                    return None
+                out.append(ref)
+            return out
+
+        rows = shelf("rows")
+        columns = shelf("columns")
+        if rows is None or columns is None:
+            return False
+        color = shelf("color")
+        size = shelf("size")
+        label = shelf("label")
+        detail = shelf("detail")
+        mark = str(spec.get("mark", "")).strip().lower()
+        if mark and mark not in self._ALLOWED_OVERRIDE_MARKS:
+            logger.warning(
+                "Override for '%s': unsupported mark '%s' â€” rejected", ws.name, mark,
+            )
+            return False
+
+        ws.rows = rows
+        ws.columns = columns
+        if color:
+            ws.color = color[0]
+        if size:
+            ws.size = size[0]
+        if label:
+            ws.label = label[0]
+        if detail:
+            ws.detail = detail
+        if mark:
+            ws.mark_type = mark
+        ws.is_failed = False
+        logger.info(
+            "Human-supplied binding applied to visual '%s' (mark=%s)",
+            ws.name, mark or ws.mark_type,
+        )
+        return True
 
     def plan(self) -> VizPlan:
         """Generate VizPlan from IR visuals."""
@@ -156,6 +265,15 @@ class VisualizationAgent:
             # Resolve all field names against IR inventory to prevent phantom refs
             self._resolve_all_field_refs(ws)
             result.worksheets.append(ws)
+
+        # Human-supplied bindings (review-approved artifact): rescue visuals
+        # that carry NO MicroStrategy evidence instead of leaving them omitted.
+        # Applied only where no evidence-based binding exists; every field is
+        # exact-validated, and an unresolvable override keeps the sheet failed.
+        if self._binding_overrides:
+            for ws in result.worksheets:
+                if ws.is_failed:
+                    self._apply_human_override(ws)
 
         # If no visuals, create default worksheets from measures
         if not result.worksheets and self.ir.measures:
@@ -202,7 +320,7 @@ class VisualizationAgent:
         )
         return result
 
-    # ── Field name resolution ────────────────────────────────────
+    # â”€â”€ Field name resolution â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     @staticmethod
     def _build_field_index(ir) -> dict[str, str]:
@@ -232,78 +350,76 @@ class VisualizationAgent:
         """
         Resolve a field name against the IR inventory.
 
-        1. Exact match (case-insensitive or MSTR ID)
-        2. Fuzzy token-overlap match
-        3. Substring containment match
-        4. Falls back to original name if no match found
+        EXACT matches only: canonical name / local_name / caption / MSTR GUID.
+        No fuzzy token overlap, no substring containment â€” those silently
+        rebound charts to wrong fields (e.g. 'Incurred Loss' â†’ 'State Loss
+        Rank' via shared token 'loss'). An unresolvable name is kept as-is
+        and surfaces as an honest resolution warning instead of a wrong chart.
         """
         if not name:
             return name
 
         key = name.lower().strip()
-
-        # 1. Exact match (name, caption, local_name, or MSTR GUID)
         if key in self._field_index:
             resolved = self._field_index[key]
             if resolved != name:
                 logger.info("Field resolution: '%s' -> '%s' (exact)", name, resolved)
             return resolved
 
-        # 2. Fuzzy token-overlap match
-        name_tokens = set(re.findall(r"\w+", key))
-        if not name_tokens:
-            return name
+        logger.warning(
+            "Field resolution: '%s' has NO exact IR match â€” keeping as-is "
+            "(fuzzy matching disabled: it produced wrong-chart regressions)", name,
+        )
 
-        best_canonical = None
-        best_score = 0
-        best_key = ""
-
-        for idx_key, canonical in self._field_index.items():
-            idx_tokens = set(re.findall(r"\w+", idx_key))
-            overlap = len(name_tokens & idx_tokens)
-            union = len(name_tokens | idx_tokens)
-            score = overlap / union if union else 0
-            if overlap >= 1 and score > best_score:
-                best_score = score
-                best_canonical = canonical
-                best_key = idx_key
-
-        if best_canonical and best_score >= 0.3:
-            logger.info(
-                "Field resolution: '%s' -> '%s' (fuzzy, score=%.2f, matched='%s')",
-                name, best_canonical, best_score, best_key,
-            )
-            return best_canonical
-
-        # 3. Substring containment
-        for idx_key, canonical in self._field_index.items():
-            if (len(key) >= 4 and key in idx_key) or (len(idx_key) >= 4 and idx_key in key):
-                logger.info(
-                    "Field resolution: '%s' -> '%s' (substring, matched='%s')",
-                    name, canonical, idx_key,
-                )
-                return canonical
-
-        logger.warning("Field resolution: '%s' has no IR match — keeping as-is", name)
         return name
 
     def _resolve_all_field_refs(self, ws: WorksheetSpec):
         """
-        Validate and resolve all FieldRef names in a WorksheetSpec
-        against the IR field inventory.
+        Resolve all FieldRef names against the IR inventory. A reference that
+        has NO exact match is a phantom (e.g. MSTR display artifacts like
+        'Column Set 1'): it is DROPPED, never emitted — an unknown pill is a
+        guaranteed red-'!' blank zone in Tableau. A worksheet left with no
+        measure anywhere is marked failed for human/override rescue.
         """
-        for ref in (ws.rows or []):
-            ref.name = self._resolve_field_name(ref.name)
-        for ref in (ws.columns or []):
-            ref.name = self._resolve_field_name(ref.name)
-        if ws.color:
-            ws.color.name = self._resolve_field_name(ws.color.name)
-        if ws.size:
-            ws.size.name = self._resolve_field_name(ws.size.name)
-        if ws.label:
-            ws.label.name = self._resolve_field_name(ws.label.name)
-        for ref in (ws.detail or []):
-            ref.name = self._resolve_field_name(ref.name)
+        known = set(self._field_index.values())
+
+        def keep(refs):
+            out = []
+            for ref in (refs or []):
+                resolved = self._resolve_field_name(ref.name)
+                if resolved in known:
+                    ref.name = resolved
+                    out.append(ref)
+                else:
+                    logger.warning(
+                        "Worksheet '%s': dropping phantom field ref '%s'", ws.name, ref.name,
+                    )
+            return out
+
+        ws.rows = keep(ws.rows)
+        ws.columns = keep(ws.columns)
+        ws.detail = keep(ws.detail)
+        if ws.color is not None:
+            kept_color = keep([ws.color])
+            ws.color = kept_color[0] if kept_color else None
+        if ws.size is not None:
+            kept_size = keep([ws.size])
+            ws.size = kept_size[0] if kept_size else None
+        if ws.label is not None:
+            kept_label = keep([ws.label])
+            ws.label = kept_label[0] if kept_label else None
+
+        has_measure = any(
+            getattr(r, "field_type", "") == "measure"
+            for r in list(ws.rows) + list(ws.columns) + [ws.size, ws.label, ws.color]
+            if r is not None
+        )
+        if not has_measure or not (ws.rows or ws.columns or ws.label or ws.size or ws.color):
+            logger.warning(
+                "Worksheet '%s': no resolvable measure binding — marking failed "
+                "instead of emitting a meaningless chart", ws.name,
+            )
+            ws.is_failed = True
 
     def _plan_worksheet(self, visual) -> WorksheetSpec:
         """Plan a single worksheet from an IR visual."""
@@ -361,155 +477,175 @@ class VisualizationAgent:
         if hasattr(visual, "size") and visual.size:
             size = FieldRef(name=visual.size, field_type="measure")
 
-        # If visual has no explicit rows/columns, infer meaningful shelves from IR dimensions & measures
-        if not rows and not columns and not label:
-            dims = [d for d in getattr(self.ir, "dimensions", []) if not getattr(d, "hidden", False)]
-            measures = getattr(self.ir, "measures", [])
-            vis_title = (getattr(visual, "name", "") or "").strip()
-            vis_clean = vis_title.lower()
+        # Scatter/bubble grain: a dimension on Color alone does NOT set the
+        # mark level of detail in Tableau — every instance collapses into a
+        # couple of aggregate dots. Mirror the bound attribute onto Detail.
+        if tableau_mark == "circle" and color is not None and not detail:
+            detail.append(FieldRef(name=color.name, field_type=color.field_type))
 
-            v_metrics = getattr(visual, "mstr_metrics", None)
-            v_attrs = getattr(visual, "mstr_attributes", None)
-            v_metric_ids = getattr(visual, "metric_ids", None)
-            v_attr_ids = getattr(visual, "attribute_ids", None)
-            matched_measure = self._match_measure_for_visual(vis_clean, measures, mstr_metrics=v_metrics, metric_ids=v_metric_ids)
-            matched_dim = self._match_dimension_for_visual(vis_clean, dims, mstr_attributes=v_attrs, attribute_ids=v_attr_ids)
+        # â”€â”€ Inference ONLY when the dossier selector carried no shelves â”€â”€â”€â”€
+        # Strictly evidence-driven, no title keywords:
+        #   P0  explicit selector shelves (consumed above)
+        #   P1  MSTR object bindings resolved by EXACT GUID or EXACT
+        #       canonical name â€” never substring/fuzzy/title matching
+        #   P2  deterministic per-TYPE default laid out from the visual's OWN
+        #       binding lists (mstr_metrics / mstr_attributes order), mirroring
+        #       the orchestrator harvest fallback so both layers agree
+        # Unresolvable â‡’ worksheet marked FAILED (honest skip) â€” a missing
+        # chart is auditable; a wrongly-bound chart silently lies.
+        ws_failed = False
+        if not rows and not columns and not label and not color:
+            v_metrics = [m for m in (getattr(visual, "mstr_metrics", None) or []) if m]
+            v_attrs = [a for a in (getattr(visual, "mstr_attributes", None) or []) if a]
+            v_metric_ids = [i for i in (getattr(visual, "metric_ids", None) or []) if i]
+            v_attr_ids = [i for i in (getattr(visual, "attribute_ids", None) or []) if i]
 
-            # Date/Time dimension preference for trends/times
-            date_dim = next(
-                (d for d in dims if any(k in d.name.lower() for k in ["date", "time", "month", "year", "day"])),
+            meas_by_id = {
+                getattr(m, "mstr_id", ""): m for m in getattr(self.ir, "measures", [])
+            }
+            meas_by_name = {}
+            for m in getattr(self.ir, "measures", []):
+                for k in (getattr(m, "local_name", ""), getattr(m, "caption", ""), getattr(m, "name", "")):
+                    if k:
+                        meas_by_name[k.lower().strip()] = m
+            dim_by_id = {
+                getattr(d, "mstr_id", ""): d for d in getattr(self.ir, "dimensions", [])
+            }
+            dim_by_name = {}
+            for d in getattr(self.ir, "dimensions", []):
+                for k in (getattr(d, "local_name", ""), getattr(d, "caption", ""), getattr(d, "name", "")):
+                    if k:
+                        dim_by_name[k.lower().strip()] = d
+
+            def resolve_meas(names, ids):
+                for i in ids:
+                    if i in meas_by_id:
+                        return meas_by_id[i]
+                for n in names:
+                    hit = meas_by_name.get(str(n).lower().strip())
+                    if hit is not None:
+                        return hit
+                return None
+
+            def resolve_dim(names, ids):
+                for i in ids:
+                    if i in dim_by_id:
+                        return dim_by_id[i]
+                for n in names:
+                    hit = dim_by_name.get(str(n).lower().strip())
+                    if hit is not None:
+                        return hit
+                return None
+
+            primary_meas = resolve_meas(v_metrics[:1], v_metric_ids[:1])
+            secondary_meas = resolve_meas(v_metrics[1:], v_metric_ids[1:])
+            primary_dim = resolve_dim(v_attrs[:1], v_attr_ids[:1])
+            other_dims = [
+                d for d in getattr(self.ir, "dimensions", [])
+                if not getattr(d, "hidden", False) and d is not primary_dim
+            ]
+            date_like = next(
+                (d for d in other_dims
+                 if any(k in (d.name or "").lower() for k in ("date", "month", "year", "time"))),
                 None,
             )
-            other_dims = [d for d in dims if d != matched_dim and d != date_dim]
-            secondary_dim = other_dims[0] if other_dims else None
+
+            def fr_m(m, agg=None):
+                return FieldRef(name=m.caption or m.name, field_type="measure", aggregation=agg) if m else None
+
+            def fr_d(d):
+                return FieldRef(name=d.caption or d.name, field_type="dimension") if d else None
 
             if raw_type in ("kpi", "metric_value", "card", "gauge"):
-                # KPI Card: Single Measure value on Text label
-                if matched_measure:
-                    is_avg = False
-                    if v_metrics and any("avg" in str(m).lower() for m in v_metrics):
-                        is_avg = True
-                    elif any(k in vis_clean for k in ["severity", "per claim", "per unit", "avg", "rate", "ratio", "score", "days", "time"]):
-                        is_avg = True
-                    if is_avg:
-                        label = FieldRef(name=matched_measure.caption or matched_measure.name, field_type="measure", aggregation="avg")
-                    else:
-                        label = FieldRef(name=matched_measure.caption or matched_measure.name, field_type="measure", aggregation="sum")
                 tableau_mark = "text"
+                if primary_meas:
+                    label = fr_m(primary_meas)
 
             elif raw_type in ("grid", "crosstab", "table"):
-                # Tabular Grid: Dimension on Rows, Measure on Columns & Text Label
-                dim_to_use = matched_dim or (dims[0] if dims else None)
-                meas_to_use = matched_measure or (measures[0] if measures else None)
-                if dim_to_use:
-                    rows.append(FieldRef(name=dim_to_use.caption or dim_to_use.name, field_type="dimension"))
-                if meas_to_use:
-                    columns.append(FieldRef(name=meas_to_use.caption or meas_to_use.name, field_type="measure"))
-                    label = FieldRef(name=meas_to_use.caption or meas_to_use.name, field_type="measure")
                 tableau_mark = "text"
+                if primary_dim:
+                    rows.append(fr_d(primary_dim))
+                if primary_meas:
+                    columns.append(fr_m(primary_meas))
+                    label = fr_m(primary_meas)
 
             elif raw_type in ("combo", "combo_chart", "dual_axis"):
-                # Dual-Axis Combo Chart: If trend / timeline, Date Dimension on Columns, Primary + Secondary Measure on Rows
-                dim_to_use = date_dim or matched_dim or (dims[0] if dims else None)
-                meas_to_use = matched_measure or (measures[0] if measures else None)
-                remaining_measures = [m for m in measures if m != meas_to_use]
-                second_meas = self._match_secondary_measure_for_visual(vis_clean, remaining_measures, meas_to_use)
-                is_timeline = (date_dim is not None) or any(k in vis_clean for k in ["trend", "month", "year", "date", "time", "day"])
-                if is_timeline:
-                    if dim_to_use:
-                        columns.append(FieldRef(name=dim_to_use.caption or dim_to_use.name, field_type="dimension"))
-                    if meas_to_use:
-                        rows.append(FieldRef(name=meas_to_use.caption or meas_to_use.name, field_type="measure"))
-                    if second_meas:
-                        rows.append(FieldRef(name=second_meas.caption or second_meas.name, field_type="measure"))
-                else:
-                    if dim_to_use:
-                        rows.append(FieldRef(name=dim_to_use.caption or dim_to_use.name, field_type="dimension"))
-                    if meas_to_use:
-                        columns.append(FieldRef(name=meas_to_use.caption or meas_to_use.name, field_type="measure"))
-                    if second_meas:
-                        columns.append(FieldRef(name=second_meas.caption or second_meas.name, field_type="measure"))
+                # MSTR combo = N measures sharing ONE categorical axis
+                axis_dim = date_like or primary_dim
+                if axis_dim:
+                    columns.append(fr_d(axis_dim))
+                if primary_meas:
+                    rows.append(fr_m(primary_meas))
+                if secondary_meas:
+                    rows.append(fr_m(secondary_meas))
                 tableau_mark = "bar"
 
-            elif tableau_mark == "bar":
-                # Bar Chart: Check if vertical column breakdown vs horizontal ranking
-                dim_to_use = matched_dim or (dims[0] if dims else None)
-                meas_to_use = matched_measure or (measures[0] if measures else None)
-                is_vertical_column = any(k in vis_clean for k in ["driver", "coverage", "distribution", "mix", "category", "line of business", "type"]) and not any(k in vis_clean for k in ["highest", "top", "rank", "ranking", "state", "adjuster", "by loss cause"])
-                if is_vertical_column:
-                    if dim_to_use:
-                        columns.append(FieldRef(name=dim_to_use.caption or dim_to_use.name, field_type="dimension"))
-                    if meas_to_use:
-                        rows.append(FieldRef(name=meas_to_use.caption or meas_to_use.name, field_type="measure"))
-                else:
-                    if dim_to_use:
-                        rows.append(FieldRef(name=dim_to_use.caption or dim_to_use.name, field_type="dimension"))
-                    if meas_to_use:
-                        columns.append(FieldRef(name=meas_to_use.caption or meas_to_use.name, field_type="measure"))
-                if secondary_dim and any(k in vis_clean for k in ["mix", "segment", "breakdown", "by"]):
-                    color = FieldRef(name=secondary_dim.caption or secondary_dim.name, field_type="dimension")
+            elif raw_type in ("pie", "donut", "donut_chart", "pie_chart"):
+                # Slices = attribute on Color, Angle = metric on Size/Label.
+                # NO axis pills â€” a metric on Columns renders detached bubbles.
+                if primary_dim:
+                    color = fr_d(primary_dim)
+                if primary_meas:
+                    size = fr_m(primary_meas)
+                    label = fr_m(primary_meas)
+                tableau_mark = "pie"
 
-            elif tableau_mark == "pie":
-                # Donut / Pie: Slice Dimension on Color, Measure on Size & Text Label
-                dim_to_use = matched_dim or (dims[0] if dims else None)
-                meas_to_use = matched_measure or (measures[0] if measures else None)
-                if dim_to_use:
-                    color = FieldRef(name=dim_to_use.caption or dim_to_use.name, field_type="dimension")
-                if meas_to_use:
-                    size = FieldRef(name=meas_to_use.caption or meas_to_use.name, field_type="measure")
-                    label = FieldRef(name=meas_to_use.caption or meas_to_use.name, field_type="measure")
+            elif raw_type in ("line", "line_chart", "area", "area_chart"):
+                axis_dim = date_like or primary_dim
+                if axis_dim:
+                    columns.append(fr_d(axis_dim))
+                if primary_meas:
+                    rows.append(fr_m(primary_meas))
+                tableau_mark = VIZ_TYPE_MAP.get(raw_type, "line")
 
-            elif tableau_mark == "line":
-                # Line / Trend Chart: Date Dimension on Columns, Measure on Rows
-                dim_to_use = date_dim or matched_dim or (dims[0] if dims else None)
-                meas_to_use = matched_measure or (measures[0] if measures else None)
-                if dim_to_use:
-                    columns.append(FieldRef(name=dim_to_use.caption or dim_to_use.name, field_type="dimension"))
-                if meas_to_use:
-                    rows.append(FieldRef(name=meas_to_use.caption or meas_to_use.name, field_type="measure"))
-                if secondary_dim and "trend" in vis_clean:
-                    color = FieldRef(name=secondary_dim.caption or secondary_dim.name, field_type="dimension")
+            elif raw_type in ("scatter", "scatter_chart", "bubble", "bubble_chart"):
+                if primary_meas:
+                    columns.append(fr_m(primary_meas))
+                if secondary_meas:
+                    rows.append(fr_m(secondary_meas))
+                # Grain: every bound instance must be its own mark
+                if primary_dim:
+                    detail.append(fr_d(primary_dim))
+                    color = fr_d(primary_dim)
+                if size is None and len(v_metrics) > 2:
+                    third = resolve_meas(v_metrics[2:], v_metric_ids[2:])
+                    if third:
+                        size = fr_m(third)
+                if not rows and not columns:
+                    if primary_dim:
+                        rows.append(fr_d(primary_dim))
+                    elif primary_meas:
+                        columns.append(fr_m(primary_meas))
+                tableau_mark = VIZ_TYPE_MAP.get(raw_type, "circle")
 
-            elif tableau_mark in ("circle", "square"):
-                # Scatter / Bubble / Heatmap
-                dim_to_use = matched_dim or (dims[0] if dims else None)
-                meas_to_use = matched_measure or (measures[0] if measures else None)
-                other_meas = [m for m in measures if m != meas_to_use]
-                second_meas = other_meas[0] if other_meas else None
-
-                if second_meas:
-                    columns.append(FieldRef(name=meas_to_use.caption or meas_to_use.name, field_type="measure"))
-                    rows.append(FieldRef(name=second_meas.caption or second_meas.name, field_type="measure"))
-                    if dim_to_use:
-                        detail.append(FieldRef(name=dim_to_use.caption or dim_to_use.name, field_type="dimension"))
-                        color = FieldRef(name=dim_to_use.caption or dim_to_use.name, field_type="dimension")
-                else:
-                    if dim_to_use:
-                        rows.append(FieldRef(name=dim_to_use.caption or dim_to_use.name, field_type="dimension"))
-                    if meas_to_use:
-                        columns.append(FieldRef(name=meas_to_use.caption or meas_to_use.name, field_type="measure"))
-
-            elif tableau_mark == "map":
-                geo_dim = next(
-                    (d for d in dims if any(k in d.name.lower() for k in ["country", "state", "city", "zip", "region", "geo"])),
-                    None,
+            elif raw_type in ("map", "geo", "heat_map", "heatmap"):
+                geo = next(
+                    (d for d in other_dims
+                     if any(k in (d.name or "").lower()
+                            for k in ("country", "state", "city", "zip", "region", "lat", "lon"))),
+                    primary_dim,
                 )
-                dim_to_use = geo_dim or matched_dim or (dims[0] if dims else None)
-                meas_to_use = matched_measure or (measures[0] if measures else None)
-                if dim_to_use:
-                    detail.append(FieldRef(name=dim_to_use.caption or dim_to_use.name, field_type="dimension"))
-                if meas_to_use:
-                    color = FieldRef(name=meas_to_use.caption or meas_to_use.name, field_type="measure")
-                tableau_mark = "automatic"
+                if geo:
+                    detail.append(fr_d(geo))
+                    rows.append(fr_d(geo))
+                if primary_meas:
+                    color = fr_m(primary_meas)
+                tableau_mark = "automatic" if raw_type in ("map", "geo") else "square"
 
-            else:
-                # Default / Grid: Dimension on Rows, Measure on Label
-                dim_to_use = matched_dim or (dims[0] if dims else None)
-                meas_to_use = matched_measure or (measures[0] if measures else None)
-                if dim_to_use:
-                    rows.append(FieldRef(name=dim_to_use.caption or dim_to_use.name, field_type="dimension"))
-                if meas_to_use:
-                    label = FieldRef(name=meas_to_use.caption or meas_to_use.name, field_type="measure")
+            else:  # bar family + unknown default
+                if primary_dim:
+                    rows.append(fr_d(primary_dim))
+                if primary_meas:
+                    columns.append(fr_m(primary_meas))
+                tableau_mark = VIZ_TYPE_MAP.get(raw_type, "bar")
+
+            if not rows and not columns and not label and not size and not color:
+                logger.warning(
+                    "Visual '%s' (%s): no MSTR binding resolved exactly â€” "
+                    "marking worksheet failed instead of guessing",
+                    visual.name, raw_type,
+                )
+                ws_failed = True
 
         # For KPI cards, ensure the measure is bound to the text label shelf
         if raw_type in ("kpi", "card", "metric_value", "gauge"):
@@ -537,251 +673,6 @@ class VisualizationAgent:
             label=label,
             detail=detail,
             filters=filters,
+            is_failed=ws_failed,
         )
 
-    def _match_measure_for_visual(
-        self,
-        vis_clean: str,
-        measures: list,
-        mstr_metrics: Optional[list[str]] = None,
-        metric_ids: Optional[list[str]] = None,
-    ) -> Optional[Any]:
-        """Find the measure that best matches MSTR metric IDs, MSTR metrics, or keywords in visual title."""
-        if not measures:
-            return None
-
-        # Priority 0: Exact MicroStrategy Metric GUID match (100% deterministic ground truth from MSTR API)
-        if metric_ids:
-            for mid in metric_ids:
-                if not mid:
-                    continue
-                for m in measures:
-                    if getattr(m, "mstr_id", "") == mid:
-                        self._used_kpi_measures.add(getattr(m, "mstr_id", getattr(m, "name", "")))
-                        return m
-
-        # Priority 1: MicroStrategy ground-truth metrics from visualization instance definition
-        if mstr_metrics:
-            for target_m in mstr_metrics:
-                if not target_m:
-                    continue
-                target_clean = target_m.lower().strip()
-                # Direct word or substring match against measures
-                for m in measures:
-                    m_name = (getattr(m, "name", "") or "").lower()
-                    m_cap = (getattr(m, "caption", "") or "").lower()
-                    m_local = (getattr(m, "local_name", "") or "").lower()
-                    if target_clean in m_name or target_clean in m_cap or target_clean in m_local or m_name in target_clean or m_cap in target_clean or m_local in target_clean:
-                        self._used_kpi_measures.add(getattr(m, "mstr_id", getattr(m, "name", "")))
-                        return m
-                # Specialized semantic keyword mapping
-                for m in measures:
-                    m_combined = f"{(getattr(m, 'name', '') or '').lower()} {(getattr(m, 'caption', '') or '').lower()}"
-                    if ("fraud" in target_clean or "score" in target_clean) and ("fraud" in m_combined or "score" in m_combined):
-                        self._used_kpi_measures.add(getattr(m, "mstr_id", getattr(m, "name", "")))
-                        return m
-                    if "subrogation" in target_clean and "subrogation" in m_combined:
-                        self._used_kpi_measures.add(getattr(m, "mstr_id", getattr(m, "name", "")))
-                        return m
-                    if "salvage" in target_clean and "salvage" in m_combined:
-                        self._used_kpi_measures.add(getattr(m, "mstr_id", getattr(m, "name", "")))
-                        return m
-                    if "recovery" in target_clean and "recovery" in m_combined:
-                        self._used_kpi_measures.add(getattr(m, "mstr_id", getattr(m, "name", "")))
-                        return m
-                    if ("claim_cnt" in target_clean or "count" in target_clean or "volume" in target_clean) and ("count" in m_combined or "row" in m_combined):
-                        self._used_kpi_measures.add(getattr(m, "mstr_id", getattr(m, "name", "")))
-                        return m
-                    if "resolution" in target_clean and ("resolution" in m_combined or "days" in m_combined or "time" in m_combined):
-                        self._used_kpi_measures.add(getattr(m, "mstr_id", getattr(m, "name", "")))
-                        return m
-                    if "incurred" in target_clean and ("incurred" in m_combined or "loss" in m_combined):
-                        self._used_kpi_measures.add(getattr(m, "mstr_id", getattr(m, "name", "")))
-                        return m
-                    if "paid" in target_clean and "paid" in m_combined:
-                        self._used_kpi_measures.add(getattr(m, "mstr_id", getattr(m, "name", "")))
-                        return m
-                    if "reserve" in target_clean and "reserve" in m_combined:
-                        self._used_kpi_measures.add(getattr(m, "mstr_id", getattr(m, "name", "")))
-                        return m
-
-                # Check if dimension contains numeric score / metric field (e.g. Fraud Score)
-                if ("fraud" in target_clean or "score" in target_clean) and hasattr(self, "ir"):
-                    for d in getattr(self.ir, "dimensions", []):
-                        d_name = (getattr(d, "name", "") or "").lower()
-                        if "fraud" in d_name or "score" in d_name:
-                            from app.agents.ir_compiler import IRMeasure
-                            synthetic_m = IRMeasure(
-                                id=getattr(d, "id", "fraud_score"),
-                                mstr_id=getattr(d, "mstr_id", ""),
-                                name=getattr(d, "name", "Fraud Score"),
-                                local_name=getattr(d, "local_name", "Fraud Score"),
-                                remote_name=getattr(d, "remote_name", "Fraud_Score"),
-                                caption=getattr(d, "caption", "Fraud Score"),
-                                tableau_calc="AVG([Fraud Score])",
-                                expression_text="AVG(Fraud Score)",
-                                precomputed_calc=None,
-                                confidence=1.0,
-                                scope="local",
-                                fingerprint_hash="",
-                                dependencies=[],
-                                null_policy="propagate",
-                                zero_division_policy="null",
-                            )
-                            self._used_kpi_measures.add(synthetic_m.name)
-                            return synthetic_m
-
-        # Priority 1: Exact match on name or caption
-        for m in measures:
-            m_name = (getattr(m, "name", "") or "").lower()
-            m_cap = (getattr(m, "caption", "") or "").lower()
-            if (m_name and m_name == vis_clean) or (m_cap and m_cap == vis_clean):
-                self._used_kpi_measures.add(getattr(m, "mstr_id", getattr(m, "name", "")))
-                return m
-
-        # Priority 2: Keyword overlap with visual title
-        best_measure = None
-        best_score = -1
-        vis_words = set(re.findall(r"\w+", vis_clean))
-
-        for m in measures:
-            m_name = (getattr(m, "name", "") or "").lower()
-            m_cap = (getattr(m, "caption", "") or "").lower()
-            m_words = set(re.findall(r"\w+", f"{m_name} {m_cap}"))
-            score = len(vis_words & m_words)
-
-            # Domain keyword bonuses
-            if ("loss" in vis_words or "incurred" in vis_words or "severity" in vis_words) and ("incurred" in m_words or "loss" in m_words):
-                score += 3
-            if "paid" in vis_words and "paid" in m_words:
-                score += 4
-            if "reserve" in vis_words and "reserve" in m_words:
-                score += 4
-            if "recovery" in vis_words and "recovery" in m_words:
-                score += 4
-            if "subrogation" in vis_words and "subrogation" in m_words:
-                score += 4
-            if "salvage" in vis_words and "salvage" in m_words:
-                score += 4
-            if ("fraud" in vis_words or "score" in vis_words) and ("fraud" in m_words or "score" in m_words):
-                score += 5
-            if ("resolution" in vis_words or "days" in vis_words or "time" in vis_words) and ("resolution" in m_words or "days" in m_words or "time" in m_words):
-                score += 4
-            if ("claim" in vis_words or "volume" in vis_words or "count" in vis_words or "total" in vis_words) and ("count" in m_words or "row" in m_words):
-                score += 3
-
-            if score > best_score:
-                best_score = score
-                best_measure = m
-
-        if best_measure and best_score > 0:
-            self._used_kpi_measures.add(getattr(best_measure, "mstr_id", getattr(best_measure, "name", "")))
-            return best_measure
-
-        # Priority 3: For generic titles ("Visualization 2 copy", etc.), pick the first unused measure
-        for m in measures:
-            m_key = getattr(m, "mstr_id", getattr(m, "name", ""))
-            if m_key not in self._used_kpi_measures:
-                self._used_kpi_measures.add(m_key)
-                return m
-
-        return measures[0]
-
-    @staticmethod
-    def _match_dimension_for_visual(
-        vis_clean: str,
-        dims: list,
-        mstr_attributes: Optional[list[str]] = None,
-        attribute_ids: Optional[list[str]] = None,
-    ) -> Optional[Any]:
-        """Find the dimension that best matches MSTR attribute IDs, MSTR attributes, or keywords in visual title."""
-        if not dims:
-            return None
-
-        # Priority 0: Exact MicroStrategy Attribute GUID match (100% deterministic ground truth from MSTR API)
-        if attribute_ids:
-            for aid in attribute_ids:
-                if not aid:
-                    continue
-                for d in dims:
-                    if getattr(d, "mstr_id", "") == aid:
-                        return d
-
-        # Priority 1: Ground-truth attributes from MSTR
-        if mstr_attributes:
-            for target_a in mstr_attributes:
-                if not target_a:
-                    continue
-                target_clean = target_a.lower().strip()
-                for d in dims:
-                    d_name = (getattr(d, "name", "") or "").lower()
-                    d_cap = (getattr(d, "caption", "") or "").lower()
-                    d_local = (getattr(d, "local_name", "") or "").lower()
-                    if target_clean in d_name or target_clean in d_cap or target_clean in d_local or d_name in target_clean or d_cap in target_clean or d_local in target_clean:
-                        return d
-
-        vis_words = set(re.findall(r"\w+", vis_clean))
-        best_dim = None
-        best_score = -1
-
-        for d in dims:
-            d_name = (getattr(d, "name", "") or "").lower()
-            d_cap = (getattr(d, "caption", "") or "").lower()
-            d_words = set(re.findall(r"\w+", f"{d_name} {d_cap}"))
-            score = len(vis_words & d_words)
-
-            # Keyword bonuses
-            if ("cause" in vis_words or "causes" in vis_words) and "cause" in d_words:
-                score += 4
-            if "status" in vis_words and "status" in d_words:
-                score += 4
-            if ("state" in vis_words or "states" in vis_words or "geography" in vis_words) and "state" in d_words:
-                score += 4
-            if "region" in vis_words and ("region" in d_words or "state" in d_words):
-                score += 3
-            if "coverage" in vis_words and "coverage" in d_words:
-                score += 4
-            if ("business" in vis_words or "lob" in vis_words or "policy" in vis_words) and "policy" in d_words:
-                score += 4
-            if ("date" in vis_words or "month" in vis_words or "trend" in vis_words or "year" in vis_words) and ("date" in d_words or "time" in d_words):
-                score += 4
-            if ("adjuster" in vis_words or "adjusters" in vis_words or "workload" in vis_words) and "adjuster" in d_words:
-                score += 4
-
-            if score > best_score:
-                best_score = score
-                best_dim = d
-
-        return best_dim if best_dim else (dims[0] if dims else None)
-
-    @staticmethod
-    def _match_secondary_measure_for_visual(vis_clean: str, remaining_measures: list, primary_measure: Any) -> Optional[Any]:
-        """Find the secondary measure that best complements the primary measure for combo charts."""
-        if not remaining_measures:
-            return None
-
-        # Priority 1: Check keywords in title specifically for second measure concepts
-        vis_words = set(re.findall(r"\w+", vis_clean))
-        for m in remaining_measures:
-            m_name = (getattr(m, "name", "") or "").lower()
-            m_cap = (getattr(m, "caption", "") or "").lower()
-            m_words = set(re.findall(r"\w+", f"{m_name} {m_cap}"))
-
-            if ("resolution" in vis_words or "days" in vis_words) and ("resolution" in m_words or "days" in m_words):
-                return m
-            if ("incurred" in vis_words or "loss" in vis_words or "amount" in vis_words) and ("incurred" in m_words or "paid" in m_words):
-                return m
-            if ("claims" in vis_words or "volume" in vis_words or "count" in vis_words) and ("count" in m_words or "row" in m_words):
-                return m
-            if ("fraud" in vis_words or "score" in vis_words) and "fraud" in m_words:
-                return m
-
-        # Priority 2: If primary is volume/count, choose monetary measure (Incurred / Paid)
-        p_name = (getattr(primary_measure, "name", "") or "").lower() if primary_measure else ""
-        if "count" in p_name or "row" in p_name:
-            incurred = next((m for m in remaining_measures if "incurred" in (getattr(m, "name", "") or "").lower()), None)
-            if incurred:
-                return incurred
-
-        # Priority 3: First available remaining measure
-        return remaining_measures[0]

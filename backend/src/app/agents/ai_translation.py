@@ -88,7 +88,7 @@ DIMTY_LOD_TEMPLATES = {
     "running_sum": "RUNNING_SUM(SUM([{measure}]))",
     "running_avg": "RUNNING_AVG(AVG([{measure}]))",
     "percent_of_total": "SUM([{measure}]) / TOTAL(SUM([{measure}]))",
-    "rank": "RANK(SUM([{measure}]))",
+    "rank": "RANK([{measure}])",
     "moving_average": "WINDOW_AVG(SUM([{measure}]), -{window}, 0)",
     # Prior-period / percent-change translation is a data-model (scaffold) problem,
     # NOT a LOOKUP() table calc. These are intentionally not auto-expressible here.
@@ -155,16 +155,30 @@ class AITranslationAgent:
         Modifies measures in-place with translated Tableau calcs and updates database MigrationObjects.
         """
         if translate_all:
-            candidates = [m for m in ir.measures if m.confidence < 0.95 or (m.expression_text and "<" in m.expression_text)]
+            candidates = [
+                m for m in ir.measures
+                if (m.confidence < 0.95 or (m.expression_text and "<" in m.expression_text))
+                # Never re-translate measures with a valid precomputed_calc — these
+                # were authored deterministically and AI/pattern heuristics can only
+                # degrade them (e.g. injecting SUM() into RANK([field])).
+                and not getattr(m, "precomputed_calc", None)
+            ]
         elif self.llm is not None:
             # Translate low-confidence measures (< 0.85) and complex MSTR expressions (<, /, If, Case, Rank, Lag)
             candidates = [
                 m for m in ir.measures
-                if m.confidence < 0.85
-                or (m.expression_text and any(k in m.expression_text for k in ["<", "/", "If(", "Case(", "Rank(", "Lag("]))
+                if (
+                    m.confidence < 0.85
+                    or (m.expression_text and any(k in m.expression_text for k in ["<", "/", "If(", "Case(", "Rank(", "Lag("]))
+                )
+                and not getattr(m, "precomputed_calc", None)
             ]
         else:
-            candidates = [m for m in ir.measures if m.confidence < 0.85]
+            candidates = [
+                m for m in ir.measures
+                if m.confidence < 0.85
+                and not getattr(m, "precomputed_calc", None)
+            ]
 
         if not candidates:
             logger.info("No candidate measures requiring AI translation")
@@ -293,8 +307,12 @@ class AITranslationAgent:
         if "rank" in expr_text.lower():
             measure_name = re.search(r'Rank\((.+?)\)', expr_text, re.IGNORECASE)
             if measure_name:
+                inner = measure_name.group(1).strip()
+                # Strip brackets if already present (e.g. "[Top State Loss]" → "Top State Loss")
+                if inner.startswith("[") and inner.endswith("]"):
+                    inner = inner[1:-1]
                 calc = DIMTY_LOD_TEMPLATES["rank"].format(
-                    measure=measure_name.group(1)
+                    measure=inner
                 )
                 return LLMTranslationResult(
                     tableau_calc=calc,

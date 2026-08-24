@@ -127,6 +127,10 @@ class PhysicalModelPlanner:
         join_edges = []
         grain_contracts = []
 
+        # dim.mstr_id -> resolved ID-form physical type; fact-side FK columns
+        # must inherit it so join partners never disagree on type.
+        dim_key_types: dict = {}
+
         # ── Build dimension tables from attributes ──────────────
 
         for dim in semantic_bundle.dimensions:
@@ -134,9 +138,20 @@ class PhysicalModelPlanner:
 
             # ID form → primary key column
             if dim.id_form:
+                # Resolve the ID form's LOGICAL data type from the form list —
+                # hard-coding VARCHAR here turned numeric attribute forms
+                # (e.g. Fraud Score, integer) into TEXT extract columns, so
+                # Tableau saw 'Abc' fields and AVG()/SUM() failed on them.
+                id_form_data_type = "string"
+                for form in dim.forms:
+                    if str(form.get("form_name", "")).upper() == "ID":
+                        id_form_data_type = form.get("data_type") or "string"
+                        break
+                resolved_type = self._map_data_type(id_form_data_type)
+                dim_key_types[dim.mstr_id] = resolved_type
                 columns.append(PhysicalColumnDef(
                     column_name=self._normalize_identifier(f"{dim.name}_ID"),
-                    data_type="VARCHAR",
+                    data_type=resolved_type,
                     source_type="attribute_form",
                     source_id=dim.mstr_id,
                     source_form="ID",
@@ -311,13 +326,16 @@ class PhysicalModelPlanner:
                             col_name, reason,
                         )
 
-            # Add FK columns for grain from dimensions
+            # Add FK columns for grain from dimensions — typed from the SAME
+            # MSTR ID form the dimension PK used, so both join partners agree
+            # (a VARCHAR fact key against an INTEGER dim key is a latent
+            # join/type defect even when the warehouse tolerates it).
             for dim in semantic_bundle.dimensions:
                 fk_col = self._normalize_identifier(f"{dim.name}_ID")
                 if fk_col not in [c.column_name for c in fact_columns]:
                     fact_columns.append(PhysicalColumnDef(
                         column_name=fk_col,
-                        data_type="VARCHAR",
+                        data_type=dim_key_types.get(dim.mstr_id, "VARCHAR"),
                         source_type="key",
                         source_id=dim.mstr_id,
                         is_key=True,

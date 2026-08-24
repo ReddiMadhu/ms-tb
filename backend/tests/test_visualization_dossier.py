@@ -34,19 +34,40 @@ def insurance_ir():
         IRMeasure(id="m5", mstr_id="MSTR_M5", name="Row Count", local_name="Row Count", remote_name="Row_Count", caption="Row Count", tableau_calc="SUM([Row Count])"),
     ]
     visuals = [
+        # Every visual carries the MSTR-provided bindings (canonical names
+        # resolved from GUIDs during harvest) — exactly what the pipeline
+        # emits for real dossiers. Shelf planning must use THESE, never the
+        # English title.
         # Page 1: Executive Summary
-        IRVisual(id="v1", name="Avg Resolution Days", mark_type="kpi", rows=[], columns=[], page_name="Executive Summary"),
-        IRVisual(id="v2", name="Claims Volume", mark_type="kpi", rows=[], columns=[], page_name="Executive Summary"),
-        IRVisual(id="v3", name="Total Claims by Loss Cause", mark_type="bar_chart", rows=[], columns=[], page_name="Executive Summary"),
-        IRVisual(id="v4", name="Top States By Incurred", mark_type="bar_chart", rows=[], columns=[], page_name="Executive Summary"),
-        IRVisual(id="v5", name="Claim Status Mix", mark_type="donut_chart", rows=[], columns=[], page_name="Executive Summary"),
-        IRVisual(id="v6", name="Loss Trend: Monthly Claims and Incurred Amount", mark_type="combo_chart", rows=[], columns=[], page_name="Executive Summary"),
+        IRVisual(id="v1", name="Avg Resolution Days", mark_type="kpi", rows=[], columns=[],
+                 page_name="Executive Summary", mstr_metrics=["Claim Resolution Time Days"], metric_ids=["MSTR_M4"]),
+        IRVisual(id="v2", name="Claims Volume", mark_type="kpi", rows=[], columns=[],
+                 page_name="Executive Summary", mstr_metrics=["Row Count"], metric_ids=["MSTR_M5"]),
+        IRVisual(id="v3", name="Total Claims by Loss Cause", mark_type="bar_chart", rows=[], columns=[],
+                 page_name="Executive Summary", mstr_metrics=["Row Count"], metric_ids=["MSTR_M5"],
+                 mstr_attributes=["Loss Cause"], attribute_ids=["MSTR_D1"]),
+        IRVisual(id="v4", name="Top States By Incurred", mark_type="bar_chart", rows=[], columns=[],
+                 page_name="Executive Summary", mstr_metrics=["Total Incurred USD"], metric_ids=["MSTR_M1"],
+                 mstr_attributes=["State Name"], attribute_ids=["MSTR_D3"]),
+        IRVisual(id="v5", name="Claim Status Mix", mark_type="donut_chart", rows=[], columns=[],
+                 page_name="Executive Summary", mstr_metrics=["Row Count"], metric_ids=["MSTR_M5"],
+                 mstr_attributes=["Claim Status"], attribute_ids=["MSTR_D2"]),
+        IRVisual(id="v6", name="Loss Trend: Monthly Claims and Incurred Amount", mark_type="combo_chart", rows=[], columns=[],
+                 page_name="Executive Summary", mstr_metrics=["Row Count", "Total Incurred USD"],
+                 metric_ids=["MSTR_M5", "MSTR_M1"],
+                 mstr_attributes=["Reported Date"], attribute_ids=["MSTR_D4"]),
 
         # Page 2: Financial & Severity View
-        IRVisual(id="v7", name="Paid", mark_type="kpi", rows=[], columns=[], page_name="Financial & Severity View"),
-        IRVisual(id="v8", name="Reserve", mark_type="kpi", rows=[], columns=[], page_name="Financial & Severity View"),
-        IRVisual(id="v9", name="Coverage Loss Drivers", mark_type="bar_chart", rows=[], columns=[], page_name="Financial & Severity View"),
-        IRVisual(id="v10", name="Incurred loss by state", mark_type="bar_chart", rows=[], columns=[], page_name="Financial & Severity View"),
+        IRVisual(id="v7", name="Paid", mark_type="kpi", rows=[], columns=[],
+                 page_name="Financial & Severity View", mstr_metrics=["Paid Amount USD"], metric_ids=["MSTR_M2"]),
+        IRVisual(id="v8", name="Reserve", mark_type="kpi", rows=[], columns=[],
+                 page_name="Financial & Severity View", mstr_metrics=["Reserve Amount USD"], metric_ids=["MSTR_M3"]),
+        IRVisual(id="v9", name="Coverage Loss Drivers", mark_type="bar_chart", rows=[], columns=[],
+                 page_name="Financial & Severity View", mstr_metrics=["Total Incurred USD"], metric_ids=["MSTR_M1"],
+                 mstr_attributes=["Coverage"], attribute_ids=["MSTR_D5"]),
+        IRVisual(id="v10", name="Incurred loss by state", mark_type="bar_chart", rows=[], columns=[],
+                 page_name="Financial & Severity View", mstr_metrics=["Total Incurred USD"], metric_ids=["MSTR_M1"],
+                 mstr_attributes=["State Name"], attribute_ids=["MSTR_D3"]),
     ]
     return BIIR(job_id="test_job", dimensions=dims, measures=measures, visuals=visuals)
 
@@ -92,11 +113,16 @@ def test_smart_shelf_assignments(insurance_ir):
     assert bar_states.rows[0].name == "State Name"
     assert bar_states.columns[0].name == "Total Incurred USD"
 
-    # 4. Donut Chart: Claim Status Mix -> pie mark, Claim Status on color
+    # 4. Donut Chart: Claim Status Mix -> pie mark, Claim Status on color,
+    #    metric on Angle/Size — and NO axis pills (a metric on Columns
+    #    renders a pie as detached bubbles on an axis — job 087560ee audit).
     donut = ws_by_name["Claim Status Mix"]
     assert donut.mark_type == "pie"
     assert donut.color is not None
     assert donut.color.name == "Claim Status"
+    assert donut.size is not None
+    assert donut.columns == []
+    assert donut.rows == []
 
     # 5. Trend: Loss Trend -> line or bar mark, Reported Date on columns
     trend = ws_by_name["Loss Trend: Monthly Claims and Incurred Amount"]

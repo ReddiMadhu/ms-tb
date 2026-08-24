@@ -32,7 +32,6 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
-from xml.sax.saxutils import escape as xml_escape
 
 from lxml import etree
 
@@ -43,31 +42,46 @@ from app.models.objects import Artifact, DatasourcePathRewrite
 
 logger = logging.getLogger(__name__)
 
-_AGG_FUNCS_WRAPPING = ("COUNTD", "MEDIAN", "COUNT", "SUM", "AVG", "MIN", "MAX")
+_AGG_FUNCS_WRAPPING = (
+    "COUNTD", "MEDIAN", "COUNT", "SUM", "AVG", "MIN", "MAX",
+    # Table calculations — their arguments are already aggregate expressions;
+    # wrapping references inside them with SUM() causes double-aggregation
+    # errors ("Argument to SUM is already an aggregation").
+    "RANK", "RANK_DENSE", "RANK_MODIFIED", "RANK_PERCENTILE", "RANK_UNIQUE",
+    "RUNNING_SUM", "RUNNING_AVG", "RUNNING_COUNT", "RUNNING_MIN", "RUNNING_MAX",
+    "WINDOW_SUM", "WINDOW_AVG", "WINDOW_COUNT", "WINDOW_MIN", "WINDOW_MAX",
+    "WINDOW_MEDIAN", "WINDOW_STDEV", "WINDOW_VAR", "WINDOW_PERCENTILE",
+    "TOTAL", "INDEX", "FIRST", "LAST", "LOOKUP", "PREVIOUS_VALUE",
+    "ATTR", "STDEV", "STDEVP", "VAR", "VARP",
+)
 
 
-def _wrap_bare_aggregate_refs(formula: str, bare_names: set, lod_wraps: Optional[dict] = None,
+def _wrap_bare_aggregate_refs(formula: str, bare_names: set,
                               skip_names: Optional[set] = None) -> str:
     """
-    Wrap references to bare (physical extract column) measures in SUM() unless
-    they already sit inside an aggregation call. A single left-to-right scan
-    tracks function-call nesting so `[X] / SUM([Y])` wraps only [X], while
-    `SUM([X]) / [Y]` wraps only [Y] — a regex/prefix heuristic cannot
-    distinguish these cases.
+    Wrap references to BARE PHYSICAL EXTRACT COLUMNS in SUM() unless they
+    already sit inside an aggregation call.
 
-    LOD calculated fields (`{FIXED ...}`, `{INCLUDE ...}`, `{EXCLUDE ...}`)
-    evaluate as ROW-LEVEL expressions when referenced inside another
-    calculation (Tableau Rule 1), so bare references to them get an outer
-    aggregation too, via `lod_wraps`: local_name → "ATTR" | "SUM".
-      - Zero-dimension `{FIXED : expr}` is a table-scoped CONSTANT repeated on
-        every row: ATTR() collapses it back to its value, whereas SUM() would
-        multiply it by the row count of the partition and silently break
-        numeric reconciliation. Hence ATTR.
-      - Dimensioned FIXED / INCLUDE / EXCLUDE results vary per row: SUM().
+    Scope is deliberately narrow and evidence-based: `bare_names` are the
+    columns recorded by classify_physical_measures / physical_measures.json
+    as materialized extract facts. An extract column is a row-level field by
+    definition, so combining it with aggregate operands requires the
+    aggregation named by the metric's own MSTR expression; this pass only
+    guards against translations that dropped it.
+
+    NOTHING else is wrapped here. References to other metrics / calculated
+    fields pass through VERBATIM: whether they are aggregates is decided by
+    their own MSTR definitions (expression_text, mexp `ft`, precomputed_calc),
+    which the translation layer must honour — the emitter never invents
+    aggregations (synthesised ATTR()/SUM() wrappers produced illegal
+    ATTR(SUM(...)) nesting in job 482de454).
+
+    A single left-to-right scan tracks function-call nesting so
+    `[X] / SUM([Y])` wraps only [X], while `SUM([X]) / [Y]` wraps only [Y] —
+    a regex/prefix heuristic cannot distinguish these cases.
     `skip_names` (the measure currently being emitted) is never wrapped.
     """
     AGGS = _AGG_FUNCS_WRAPPING
-    lod_wraps = lod_wraps or {}
     skip = skip_names or set()
     out: list[str] = []
     stack: list[bool] = []   # per open paren: True when inside an agg call
@@ -82,15 +96,10 @@ def _wrap_bare_aggregate_refs(formula: str, bare_names: set, lod_wraps: Optional
                 out.append(formula[i:])
                 break
             name = formula[i + 1:j].strip()
-            if not any(stack) and name not in skip:
-                if name in bare_names:
-                    out.append(f"SUM([{name}])")
-                    i = j + 1
-                    continue
-                if name in lod_wraps:
-                    out.append(f"{lod_wraps[name]}([{name}])")
-                    i = j + 1
-                    continue
+            if not any(stack) and name not in skip and name in bare_names:
+                out.append(f"SUM([{name}])")
+                i = j + 1
+                continue
             out.append(formula[i:j + 1])
             i = j + 1
             continue
@@ -130,6 +139,39 @@ def _wrap_bare_aggregate_refs(formula: str, bare_names: set, lod_wraps: Optional
         i += 1
 
     return "".join(out)
+
+
+# Aggregations that REJECT an already-aggregate argument in Tableau
+# ("Argument to X is already an aggregation"). Deliberately EXCLUDES table
+# calculations (RANK / WINDOW_ / RUNNING_ / TOTAL legally consume aggregates)
+# and MIN/MAX (legal around aggregates).
+_NESTED_AGG_OVER_AGG_RE = re.compile(
+    r"\b(?:SUM|AVG|ATTR|MEDIAN|COUNT|COUNTD|STDEVP?|VARP?)\s*"
+    r"\(\s*(?:SUM|AVG|ATTR|MEDIAN|COUNT|COUNTD|STDEVP?|VARP?)\s*\(",
+    re.IGNORECASE,
+)
+
+
+def _find_illegal_aggregation_nesting(formula: str, agg_calc_fields: set):
+    """Return the offending snippet if `formula` aggregates something that is
+    itself aggregate. Two evidence-backed cases:
+      1. direct nesting:              ATTR(SUM(...)), COUNTD(COUNT(...))
+      2. aggregation over an aggregate CALC FIELD:
+         SUM([Top State Loss]), ATTR([Total_Claims])
+    Purely diagnostic — callers fail closed, nothing is rewritten."""
+    hit = _NESTED_AGG_OVER_AGG_RE.search(formula)
+    if hit:
+        return hit.group(0)
+    for name in sorted(agg_calc_fields, key=len, reverse=True):
+        hit = re.search(
+            rf"\b(?:SUM|AVG|ATTR|MEDIAN|COUNT|COUNTD|STDEVP?|VARP?)"
+            rf"\s*\(\s*\[{re.escape(name)}\]\s*\)",
+            formula,
+            re.IGNORECASE,
+        )
+        if hit:
+            return hit.group(0)
+    return None
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -192,6 +234,45 @@ class TableauEmitterAgent:
         twb_dir = self.artifacts_dir / "workbooks" / workbook_name
         twb_dir.mkdir(parents=True, exist_ok=True)
 
+        # Contract gate: the emitted TWB binds [Extract].[Extract]. Any real
+        # Hyper file (>4 KB; tiny files are test dummies) MUST contain that
+        # table, or Tableau fails with "extract does not contain a schema
+        # 'Extract'". Refuse to package a mismatched pair.
+        for _dom, _hpath in (hyper_paths or {}).items():
+            try:
+                _hp = Path(_hpath)
+                if not _hp.exists() or _hp.stat().st_size <= 4096:
+                    continue  # absent/placeholder — orchestrator already flagged
+                from tableauhyperapi import HyperProcess, Telemetry, Connection
+                with HyperProcess(telemetry=Telemetry.DO_NOT_SEND_USAGE_DATA_TO_TABLEAU) as _hyp:
+                    with Connection(endpoint=_hyp.endpoint, database=str(_hp)) as _conn:
+                        _tables = [
+                            f"{str(_s).strip(chr(34))}.{tn.name.unescaped}"
+                            for _s in _conn.catalog.get_schema_names()
+                            for tn in _conn.catalog.get_table_names(_s)
+                        ]
+                if "Extract.Extract" not in _tables:
+                    from app.models.objects import Issue as IssueModel
+                    self.db.add(IssueModel(
+                        job_id=self.job.id,
+                        object_id=self.job.id,
+                        severity="blocker",
+                        category="hyper",
+                        message=(
+                            f"Refusing to package workbook '{workbook_name}': Hyper "
+                            f"'{_hpath}' lacks table [Extract].[Extract] "
+                            f"(contains: {_tables or 'none'}). Rebuild the extract."
+                        ),
+                    ))
+                    self.db.commit()
+                    raise ValueError(
+                        f"Hyper contract violation: {_hpath} lacks [Extract].[Extract]"
+                    )
+            except ValueError:
+                raise
+            except Exception:
+                pass  # verification unavailable in this environment
+
         # Step 1: Create TWB XML structure
         root = self._create_workbook_root()
 
@@ -220,6 +301,27 @@ class TableauEmitterAgent:
                 ws_spec.name = base
 
         # Step 3: Add worksheets
+        # Failed worksheets are excluded below — record WHY first, so an
+        # absent chart is a visible review item, never a silent blank tile.
+        try:
+            from app.models.objects import Issue as IssueModel
+            for ws_spec in viz_plan.worksheets:
+                if ws_spec.is_failed:
+                    self.db.add(IssueModel(
+                        job_id=self.job.id,
+                        object_id=getattr(ws_spec, "id", None),
+                        severity="blocker",
+                        category="harvest",
+                        message=(
+                            f"Visual '{ws_spec.name}' has no MicroStrategy-provided "
+                            f"bindings (no metrics/attributes/shelves); worksheet "
+                            f"skipped pending re-harvest or human-supplied binding."
+                        ),
+                    ))
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+
         worksheets_node = etree.SubElement(root, "worksheets")
         for ws_spec in viz_plan.worksheets:
             if not ws_spec.is_failed:
@@ -359,6 +461,12 @@ class TableauEmitterAgent:
             dtype = self._map_to_tableau_datatype(dim.data_type)
             dname = getattr(dim, "name", getattr(dim, "local_name", getattr(dim, "caption", "")))
             # Numeric-typed dimensions are emitted as quantitative measures.
+            # Evidence: dim.data_type now comes from the MSTR attribute form
+            # (`forms[0].data_type`, e.g. integer) via ir_compiler, and the
+            # planner builds the extract column with that same type
+            # (physical_model_planner ID-form mapping). One truth, end to end:
+            # MSTR declares numeric → extract is numeric → AVG([col]) is legal,
+            # and NO compensating INT() casts are emitted anywhere.
             # (Note: we intentionally do NOT special-case any specific field name
             #  like "Fraud Score" — a name heuristic is demo-specific and would
             #  corrupt arbitrary numeric dimensions with non-numeric names.)
@@ -371,7 +479,7 @@ class TableauEmitterAgent:
                 col_type = "nominal" if dim.data_type == "string" else "ordinal"
 
             col = etree.SubElement(ds_node, "column", attrib={
-                "caption": xml_escape(dim.caption),
+                "caption": dim.caption,
                 "datatype": dtype,
                 "name": f"[{dim.local_name}]",
                 "role": role,
@@ -464,38 +572,26 @@ class TableauEmitterAgent:
             meas_name_map[ln.lower().replace("_", " ")] = ln
             meas_name_map[ln.lower().replace(" ", "_")] = ln
 
-        # Rule 1: LOD calculated fields are row-level when referenced inside
-        # another calculation. Map each LOD field's local name to the outer
-        # aggregation its references require: ATTR for zero-dimension FIXED
-        # (table-scoped constant — SUM would multiply by row count), SUM for
-        # dimensioned FIXED / INCLUDE / EXCLUDE.
-        lod_wraps: dict = {}
+        # ── Evidence set: which referenced fields are ALREADY aggregates? ──
+        # Derived purely from each measure's own translated calc, which the
+        # translation layer (mexp `ft`, expression_text, precomputed_calc,
+        # LLM rules) produced from the MSTR definition. Used ONLY by the
+        # fail-closed nesting gate below — never to mutate formulas.
+        _AGG_OR_LOD_RE = re.compile(
+            r"\b(?:SUM|AVG|ATTR|MEDIAN|COUNT|COUNTD|STDEVP?|VARP?|"
+            r"RANK(?:_\w+)?|(?:RUNNING|WINDOW)_\w+|TOTAL)\s*\("
+            r"|\{\s*(?:FIXED|INCLUDE|EXCLUDE)",
+            re.IGNORECASE,
+        )
+        agg_calc_fields = set()
         for m in ir.measures:
-            tc = (getattr(m, "tableau_calc", "") or "").strip()
-            mt = re.match(r"^\{\s*(FIXED|INCLUDE|EXCLUDE)([^:]*):", tc, re.IGNORECASE)
-            if not mt:
+            # Physical extract columns are row-level by definition, even when
+            # a stale duplicate calc string exists in the IR — exclude them.
+            if getattr(m, "mstr_id", None) in physical_ids:
                 continue
             ln = getattr(m, "local_name", "") or getattr(m, "caption", "")
-            if not ln:
-                continue
-            is_const = mt.group(1).upper() == "FIXED" and not mt.group(2).strip()
-            lod_wraps[ln] = "ATTR" if is_const else "SUM"
-
-        def _upgrade_const_lod_sums(f: str) -> str:
-            """Heal cached/LLM formulas that wrapped a constant-LOD field in
-            SUM(...) — e.g. RANK(SUM([Top State Loss])) or a denominator
-            SUM([Total_Claims]). SUM over the per-row constant multiplies it
-            by row count; ATTR preserves the value."""
-            for ln, fn in lod_wraps.items():
-                if fn != "ATTR":
-                    continue
-                f = re.sub(
-                    rf"\bSUM\s*\(\s*\[\s*{re.escape(ln)}\s*\]\s*\)",
-                    f"ATTR([{ln}])",
-                    f,
-                    flags=re.IGNORECASE,
-                )
-            return f
+            if ln and _AGG_OR_LOD_RE.search(getattr(m, "tableau_calc", "") or ""):
+                agg_calc_fields.add(ln)
 
         for measure in sorted_measures:
             loc_name = getattr(measure, "local_name", getattr(measure, "caption", ""))
@@ -542,7 +638,7 @@ class TableauEmitterAgent:
             existing_cols.add(f"[{loc_name}]")
 
             col = etree.SubElement(ds_node, "column", attrib={
-                "caption": xml_escape(measure.caption),
+                "caption": measure.caption,
                 "datatype": "real",
                 "name": f"[{loc_name}]",
                 "role": "measure",
@@ -561,20 +657,51 @@ class TableauEmitterAgent:
 
             formula = re.sub(r'\[([^\]]+)\]', _replace_ref, formula)
 
-            # Aggregate-wrap bare physical references inside derived formulas.
-            # A token bound to a raw extract column is row-level; combining it
-            # with an aggregate sibling (e.g. a SUM calc) without wrapping
-            # produces "Cannot mix aggregate and non-aggregate" in Tableau.
-            # Bare references to LOD fields get the same treatment with the
-            # aggregation chosen by lod_wraps (ATTR for table-scoped FIXED).
-            if formula and (physical_local_names or lod_wraps):
+            # Aggregate-wrap bare PHYSICAL extract-column references only.
+            # References to other metrics/calculated fields pass through
+            # verbatim — their aggregate/row-level nature is fixed by the
+            # MSTR definition they were translated from, and the emitter does
+            # not second-guess it.
+            if formula and physical_local_names:
                 formula = _wrap_bare_aggregate_refs(
                     formula,
                     physical_local_names,
-                    lod_wraps=lod_wraps,
                     skip_names={loc_name, meas_name},
                 )
-                formula = _upgrade_const_lod_sums(formula)
+
+            # ── Fail-closed nesting gate (check, never mutate) ───────────
+            # A formula that aggregates an already-aggregate operand —
+            # ATTR(SUM(...)), SUM([SomeAggCalc]), RANK(SUM([SomeAggCalc])) —
+            # can never compile in Tableau ("Argument to X is already an
+            # aggregation"). That is a TRANSLATION defect against the MSTR
+            # definition, so skip emission, record a blocker Issue, and let a
+            # human correct the calc. Nothing is rewritten in place.
+            bad = _find_illegal_aggregation_nesting(formula, agg_calc_fields)
+            if bad:
+                logger.warning(
+                    "Skipping calculated field '%s': illegal aggregation "
+                    "nesting (%s). Fix the translated calc against the MSTR "
+                    "definition before re-emission.",
+                    meas_name, bad,
+                )
+                try:
+                    from app.models.objects import Issue as IssueModel
+                    self.db.add(IssueModel(
+                        job_id=self.job.id,
+                        object_id=getattr(measure, "mstr_id", None),
+                        severity="blocker",
+                        category="emission",
+                        message=(
+                            f"Calculated field '{meas_name}' was NOT emitted: "
+                            f"illegal aggregation nesting ({bad}). Re-translate "
+                            f"the MSTR metric so aggregate operands are "
+                            f"referenced directly."
+                        ),
+                    ))
+                    self.db.commit()
+                except Exception:
+                    pass
+                continue
 
             self_refs = {
                 f"[{loc_name}]", f"[{meas_name}]",
@@ -605,7 +732,7 @@ class TableauEmitterAgent:
             if formula and formula not in self_refs:
                 etree.SubElement(col, "calculation", attrib={
                     "class": "tableau",
-                    "formula": xml_escape(formula),
+                    "formula": formula,
                 })
 
     def _topo_sort_measures(self, measures: list) -> list:

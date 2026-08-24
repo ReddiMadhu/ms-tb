@@ -121,3 +121,6 @@ Desktop.ini
 *.sln
 *.sw?
 *.bak
+
+e2e_keys.json
+e2e-runs/

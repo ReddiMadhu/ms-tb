@@ -579,7 +579,7 @@ class HyperAgent:
 
             TYPE_MAP = {
                 "VARCHAR": SqlType.text(),
-                "INTEGER": SqlType.int_(),
+                "INTEGER": SqlType.int(),
                 "BIGINT": SqlType.big_int(),
                 "DOUBLE": SqlType.double(),
                 "DATE": SqlType.date(),
