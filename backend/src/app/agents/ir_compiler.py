@@ -40,6 +40,18 @@ logger = logging.getLogger(__name__)
 # captured API output are mapped; unknown codes fail closed to text compilation.
 MSTR_FT_AGG = {12: "SUM", 13: "COUNT", 14: "AVG"}
 
+# Aggregate calls recognized when classifying division operands (Rule 1).
+# ZN( counts as aggregate-neutral here: ZN(SUM(x)) is aggregate, but a bare
+# ZN([col]) operand reaching the division guard implies a row-level policy
+# that the caller (emitter) resolves for physical columns.
+_AGG_CALL_START_RE = re.compile(
+    r"^(?:SUM|AVG|COUNT|COUNTD|MIN|MAX|MEDIAN|STDEV|VAR|ATTR|TOTAL)\s*\(",
+    re.IGNORECASE,
+)
+
+# Bare operand shapes: [Field Name], Field_Name, or plain identifier
+_BARE_OPERAND_RE = re.compile(r"^(?:\[([^\]]+)\]|([A-Za-z_][\w ]*))$")
+
 
 def _strip_formula_decorations(text: str) -> tuple[str, Optional[str]]:
     """Strip MSTR <param> blocks and trailing {dimty} from a native formula.
@@ -247,6 +259,11 @@ class IRCompilerAgent:
         # MSTR object-id → display-name map, populated from the semantic bundle.
         # Used to resolve {did, t} references in real mexp trees and formula text.
         self._id_to_name: dict = {}
+        # Lowercased display + local names of all METRICS in the bundle.
+        # Used by Rule-1 aggregation alignment: a bare reference to a metric
+        # inside a division is an aggregate/LOD field — never a row value —
+        # so it must carry an outer aggregation before entering arithmetic.
+        self._metric_names: set = set()
 
     def compile(self, semantic_bundle, physical_plan) -> BIIR:
         """
@@ -269,6 +286,8 @@ class IRCompilerAgent:
             self._id_to_name[fa.mstr_id] = fa.name
         for m in getattr(semantic_bundle, "measures", []) or []:
             self._id_to_name[m.mstr_id] = m.name
+            self._metric_names.add(m.name.lower())
+            self._metric_names.add(self._make_local_name(m.name).lower())
 
         # ── Step 1: Tables ──────────────────────────────────────
 
@@ -523,6 +542,31 @@ class IRCompilerAgent:
         local = self._make_local_name(measure.name)
         return f"SUM([{local}])"
 
+    def _aggregate_metric_ref(self, expr: str) -> str:
+        """
+        Rule-1 helper: wrap a bare reference to a known METRIC in SUM(...).
+
+        In MSTR, `[Litigation Claims] / Total_Claims` divides metric-by-metric
+        at report grain. In Tableau those operands are aggregate or LOD
+        calculated fields; an unwrapped LOD reference is row-level and makes
+        the division (and its IIF guard) fail with "Cannot mix aggregate and
+        non-aggregate". Operands that are already aggregate calls, literals,
+        arithmetic, or unknown (raw column/attribute) names pass through
+        unchanged.
+        """
+        e = (expr or "").strip()
+        if not e or _AGG_CALL_START_RE.match(e):
+            return e
+        m = _BARE_OPERAND_RE.match(e)
+        if not m:
+            return e
+        name = (m.group(1) if m.group(1) is not None else m.group(2)).strip()
+        # getattr fallback: bare instances built by tests bypass __init__
+        metric_names = getattr(self, "_metric_names", None) or set()
+        if not name or name.lower() not in metric_names:
+            return e
+        return f"SUM([{name}])"
+
     def _compile_mstr_formula(self, f_text: str, zero_div_policy: str = "null") -> Optional[str]:
         """
         Compile a native MSTR formula string (datasets[].mx[].f) to Tableau syntax.
@@ -616,12 +660,32 @@ class IRCompilerAgent:
             flags=re.IGNORECASE,
         )
 
-        # Top-level simple division gets the zero-division guard
-        if core.count("/") == 1 and "(" not in core:
-            left, right = (p.strip() for p in core.split("/", 1))
-            if zero_div_policy == "zero":
-                return f"IIF({right} = 0, 0, {left} / {right})"
-            return f"IIF({right} = 0, NULL, {left} / {right})"
+        # Top-level simple division gets the zero-division guard.
+        # Rule 1 aggregation alignment: a bare reference to another METRIC on
+        # the denominator side is an aggregate/LOD field (row-level when the
+        # LOD is referenced) — Tableau rejects aggregate ÷ non-aggregate, so
+        # wrap it in SUM(...) before guarding. Raw row-level operands are
+        # left untouched (row ÷ row is valid); physical-column wrapping is
+        # applied later by the emitter's _wrap_bare_aggregate_refs.
+        # The slash must sit at paren depth 0: exactly one top-level slash
+        # and no other slash anywhere (nested x/y inside SUM(...) stays put).
+        if core.count("/") == 1:
+            depth = 0
+            split_at = -1
+            for idx, ch in enumerate(core):
+                if ch == "(":
+                    depth += 1
+                elif ch == ")":
+                    depth -= 1
+                elif ch == "/" and depth == 0:
+                    split_at = idx
+                    break
+            if split_at > 0:
+                left = core[:split_at].strip()
+                right = self._aggregate_metric_ref(core[split_at + 1:].strip())
+                if zero_div_policy == "zero":
+                    return f"IIF({right} = 0, 0, {left} / {right})"
+                return f"IIF({right} = 0, NULL, {left} / {right})"
 
         return core
 
@@ -653,11 +717,16 @@ class IRCompilerAgent:
                 left = self._ast_to_tableau(children[0], null_policy, zero_div_policy)
                 right = self._ast_to_tableau(children[1], null_policy, zero_div_policy)
                 if left and right:
-                    # Handle division with zero-division policy
-                    if op == "/" and zero_div_policy == "null":
-                        return f"IIF({right} = 0, NULL, {left} / {right})"
-                    elif op == "/" and zero_div_policy == "zero":
-                        return f"IIF({right} = 0, 0, {left} / {right})"
+                    # Handle division with zero-division policy.
+                    # Rule 1: align the denominator to the numerator's
+                    # aggregation level — a bare metric/LOD ref on the right
+                    # is row-level when referenced and must be wrapped.
+                    if op == "/":
+                        right = self._aggregate_metric_ref(right)
+                        if zero_div_policy == "null":
+                            return f"IIF({right} = 0, NULL, {left} / {right})"
+                        if zero_div_policy == "zero":
+                            return f"IIF({right} = 0, 0, {left} / {right})"
                     return f"({left} {op} {right})"
 
         # Column/field references

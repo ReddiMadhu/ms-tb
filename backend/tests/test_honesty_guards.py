@@ -364,11 +364,36 @@ def test_real_mexp_single_aggregation_compiles():
 
 
 def test_real_ratio_formula_gets_zero_division_guard():
-    """High Fraud Rate: '[High Fraud Claims] / Total_Claims' → guarded division."""
+    """High Fraud Rate: '[High Fraud Claims] / Total_Claims' → guarded division
+    with Rule-1 aggregation alignment: the denominator names a known METRIC
+    (an aggregate/LOD field, row-level when referenced), so it must be wrapped
+    in SUM() inside both the IIF condition and the quotient."""
     agent = _bare_compiler()
+    agent._metric_names = {"high fraud claims", "total_claims", "total claims"}
     m = _mx_measure("High Fraud Rate", text="[High Fraud Claims] / Total_Claims")
     out = agent._compile_expression(m, "propagate", "null")
-    assert out == "IIF([Total_Claims] = 0, NULL, [High Fraud Claims] / [Total_Claims])"
+    assert out == (
+        "IIF(SUM([Total_Claims]) = 0, NULL, [High Fraud Claims] / SUM([Total_Claims]))"
+    )
+
+
+def test_ratio_with_raw_column_denominator_stays_row_level():
+    """An unknown (raw extract column) denominator must NOT be wrapped by the
+    compiler — row ÷ row is valid; the emitter owns physical-ref wrapping."""
+    agent = _bare_compiler()
+    agent._metric_names = {"paid amount usd"}
+    m = _mx_measure("Per Claim", text="[Paid Amount USD] / some_raw_column")
+    out = agent._compile_mstr_formula(m.expression_text)
+    assert out == "IIF([some_raw_column] = 0, NULL, [Paid Amount USD] / [some_raw_column])"
+
+
+def test_ratio_with_aggregate_denominator_keeps_existing_wrap():
+    """An already-aggregated denominator passes through unchanged (still guarded)."""
+    agent = _bare_compiler()
+    agent._metric_names = {"a"}
+    m = _mx_measure("Ratio", text="[A] / SUM([B])")
+    out = agent._compile_mstr_formula(m.expression_text)
+    assert out == "IIF(SUM([B]) = 0, NULL, [A] / SUM([B]))"
 
 
 def test_real_if_formula_translates_to_tableau_if():

@@ -233,11 +233,38 @@ class HyperAgent:
         col_names = active_col_names
         table_def = TableDefinition(TableName(schema_name, table_name))
 
+        # Map the source's ACTUAL Arrow data types to Hyper SQL types instead
+        # of guessing from column-name keywords. Keyword guessing is what
+        # typed numeric attributes like "Fraud Score" (integer ID form in
+        # MSTR) as TEXT — forcing every downstream calculation into defensive
+        # INT()/FLOAT() casts that break on formatted strings.
+        import pyarrow.types as pa_types
+
+        def _sql_type_for(arrow_type) -> "SqlType":
+            if pa_types.is_integer(arrow_type):
+                return SqlType.big_int()
+            if pa_types.is_floating(arrow_type) or pa_types.is_decimal(arrow_type):
+                return SqlType.double()
+            if pa_types.is_boolean(arrow_type):
+                return SqlType.bool()
+            if pa_types.is_date(arrow_type):
+                return SqlType.date()
+            if pa_types.is_timestamp(arrow_type):
+                return SqlType.timestamp()
+            if pa_types.is_time(arrow_type):
+                return SqlType.time()
+            return SqlType.text()
+
         for col_name in col_names:
-            if col_name in measures or any(kw in col_name.lower() for kw in ["amount", "loss", "reserve", "recovery", "incurred", "count", "days", "salvage", "subrogation"]):
-                table_def.add_column(col_name, SqlType.double())
-            else:
+            arrow_type = first_batch.schema.field(col_name).type
+            if col_name in measures and pa_types.is_string(arrow_type):
+                # Known measure arriving as text (dirty/formatted source).
+                # Keep TEXT: row-level FLOAT() casts in the calculated fields
+                # handle conversion; forcing DOUBLE here would abort ingestion
+                # on the first non-numeric value.
                 table_def.add_column(col_name, SqlType.text())
+            else:
+                table_def.add_column(col_name, _sql_type_for(arrow_type))
 
         total_rows = 0
         hasher = hashlib.sha256()

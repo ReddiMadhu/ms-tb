@@ -46,15 +46,29 @@ logger = logging.getLogger(__name__)
 _AGG_FUNCS_WRAPPING = ("COUNTD", "MEDIAN", "COUNT", "SUM", "AVG", "MIN", "MAX")
 
 
-def _wrap_bare_aggregate_refs(formula: str, bare_names: set) -> str:
+def _wrap_bare_aggregate_refs(formula: str, bare_names: set, lod_wraps: Optional[dict] = None,
+                              skip_names: Optional[set] = None) -> str:
     """
     Wrap references to bare (physical extract column) measures in SUM() unless
     they already sit inside an aggregation call. A single left-to-right scan
     tracks function-call nesting so `[X] / SUM([Y])` wraps only [X], while
     `SUM([X]) / [Y]` wraps only [Y] — a regex/prefix heuristic cannot
     distinguish these cases.
+
+    LOD calculated fields (`{FIXED ...}`, `{INCLUDE ...}`, `{EXCLUDE ...}`)
+    evaluate as ROW-LEVEL expressions when referenced inside another
+    calculation (Tableau Rule 1), so bare references to them get an outer
+    aggregation too, via `lod_wraps`: local_name → "ATTR" | "SUM".
+      - Zero-dimension `{FIXED : expr}` is a table-scoped CONSTANT repeated on
+        every row: ATTR() collapses it back to its value, whereas SUM() would
+        multiply it by the row count of the partition and silently break
+        numeric reconciliation. Hence ATTR.
+      - Dimensioned FIXED / INCLUDE / EXCLUDE results vary per row: SUM().
+    `skip_names` (the measure currently being emitted) is never wrapped.
     """
     AGGS = _AGG_FUNCS_WRAPPING
+    lod_wraps = lod_wraps or {}
+    skip = skip_names or set()
     out: list[str] = []
     stack: list[bool] = []   # per open paren: True when inside an agg call
     i, n = 0, len(formula)
@@ -68,10 +82,16 @@ def _wrap_bare_aggregate_refs(formula: str, bare_names: set) -> str:
                 out.append(formula[i:])
                 break
             name = formula[i + 1:j].strip()
-            if name in bare_names and not any(stack):
-                out.append(f"SUM([{name}])")
-            else:
-                out.append(formula[i:j + 1])
+            if not any(stack) and name not in skip:
+                if name in bare_names:
+                    out.append(f"SUM([{name}])")
+                    i = j + 1
+                    continue
+                if name in lod_wraps:
+                    out.append(f"{lod_wraps[name]}([{name}])")
+                    i = j + 1
+                    continue
+            out.append(formula[i:j + 1])
             i = j + 1
             continue
 
@@ -444,6 +464,39 @@ class TableauEmitterAgent:
             meas_name_map[ln.lower().replace("_", " ")] = ln
             meas_name_map[ln.lower().replace(" ", "_")] = ln
 
+        # Rule 1: LOD calculated fields are row-level when referenced inside
+        # another calculation. Map each LOD field's local name to the outer
+        # aggregation its references require: ATTR for zero-dimension FIXED
+        # (table-scoped constant — SUM would multiply by row count), SUM for
+        # dimensioned FIXED / INCLUDE / EXCLUDE.
+        lod_wraps: dict = {}
+        for m in ir.measures:
+            tc = (getattr(m, "tableau_calc", "") or "").strip()
+            mt = re.match(r"^\{\s*(FIXED|INCLUDE|EXCLUDE)([^:]*):", tc, re.IGNORECASE)
+            if not mt:
+                continue
+            ln = getattr(m, "local_name", "") or getattr(m, "caption", "")
+            if not ln:
+                continue
+            is_const = mt.group(1).upper() == "FIXED" and not mt.group(2).strip()
+            lod_wraps[ln] = "ATTR" if is_const else "SUM"
+
+        def _upgrade_const_lod_sums(f: str) -> str:
+            """Heal cached/LLM formulas that wrapped a constant-LOD field in
+            SUM(...) — e.g. RANK(SUM([Top State Loss])) or a denominator
+            SUM([Total_Claims]). SUM over the per-row constant multiplies it
+            by row count; ATTR preserves the value."""
+            for ln, fn in lod_wraps.items():
+                if fn != "ATTR":
+                    continue
+                f = re.sub(
+                    rf"\bSUM\s*\(\s*\[\s*{re.escape(ln)}\s*\]\s*\)",
+                    f"ATTR([{ln}])",
+                    f,
+                    flags=re.IGNORECASE,
+                )
+            return f
+
         for measure in sorted_measures:
             loc_name = getattr(measure, "local_name", getattr(measure, "caption", ""))
             meas_name = getattr(measure, "name", loc_name)
@@ -512,8 +565,16 @@ class TableauEmitterAgent:
             # A token bound to a raw extract column is row-level; combining it
             # with an aggregate sibling (e.g. a SUM calc) without wrapping
             # produces "Cannot mix aggregate and non-aggregate" in Tableau.
-            if formula and physical_local_names:
-                formula = _wrap_bare_aggregate_refs(formula, physical_local_names)
+            # Bare references to LOD fields get the same treatment with the
+            # aggregation chosen by lod_wraps (ATTR for table-scoped FIXED).
+            if formula and (physical_local_names or lod_wraps):
+                formula = _wrap_bare_aggregate_refs(
+                    formula,
+                    physical_local_names,
+                    lod_wraps=lod_wraps,
+                    skip_names={loc_name, meas_name},
+                )
+                formula = _upgrade_const_lod_sums(formula)
 
             self_refs = {
                 f"[{loc_name}]", f"[{meas_name}]",
