@@ -1,0 +1,79 @@
+{
+  "_readme": [
+    "HUMAN-SUPPLIED VISUAL BINDINGS (review-board approved).",
+    "These ten visuals carry ZERO MicroStrategy-provided bindings in the",
+    "dossier export (no selector shelves, empty definition payloads).",
+    "Each entry below was transcribed by a human from the MSTR dossier as",
+    "rendered (Phase-2 ground-truth matrix) - the pipeline applies these",
+    "fields VERBATIM and never invents bindings for visuals missing here.",
+    "Field names must resolve EXACTLY against the IR inventory; any entry",
+    "naming an unknown field is rejected and the visual stays failed.",
+    "Keys are matched case-insensitively after trimming whitespace."
+  ],
+  "Coverage Loss Drivers": {
+    "mark": "bar",
+    "rows": ["Coverage"],
+    "columns": ["Total Incurred USD"]
+  },
+  "Severity Distribution": {
+    "mark": "bar",
+    "rows": ["Severity Band"],
+    "columns": ["Count (Claim ID)"]
+  },
+  "Region Loss Heat Ranking": {
+    "_note": "REVISED after prod render review: square with rows-only stretched to full-width stripes. Adding the measure to columns produces the standard single-measure highlight table (one tile per region) per reviewer correction.",
+    "mark": "square",
+    "rows": ["Region"],
+    "columns": ["Total Incurred USD"],
+    "color": ["Total Incurred USD"],
+    "label": ["Total Incurred USD"]
+  },
+  "Line of Business Mix": {
+    "mark": "bar",
+    "rows": ["Line of Business"],
+    "columns": ["Total Incurred USD"]
+  },
+  "Litigation by State": {
+    "mark": "bar",
+    "rows": ["State"],
+    "columns": ["Litigation Claims"]
+  },
+  "Incurred loss by state": {
+    "mark": "bar",
+    "rows": ["State"],
+    "columns": ["Total Incurred USD"]
+  },
+  "Claim Volume by region": {
+    "mark": "bar",
+    "rows": ["Region"],
+    "columns": ["Count (Claim ID)"]
+  },
+  "Incurred loss by region": {
+    "mark": "bar",
+    "rows": ["Region"],
+    "columns": ["Total Incurred USD"]
+  },
+  "Claim volume by state": {
+    "_note": "REVISED after prod render review: mark=text with a SINGLE continuous measure on columns makes Tableau draw a numeric axis with literal 'Abc' glyphs (a text table needs the measure on Text, not Columns). Bar matches every sibling state chart.",
+    "mark": "bar",
+    "rows": ["State"],
+    "columns": ["Count (Claim ID)"]
+  },
+  "Workload By Adjusters": {
+    "mark": "text",
+    "rows": ["Adjuster Name"],
+    "columns": ["Count (Claim ID)", "Avg_Claim_Resolution_Days"]
+  },
+  "Loss Trend: Monthly Claims and Incurred Amount": {
+    "_note": "Harvest carried only raw token LOSS_YR_MTH + zero metrics; axis per Phase-2 matrix is Loss Date.",
+    "mark": "bar",
+    "columns": ["Loss Date"],
+    "rows": ["Count (Claim ID)", "Total Incurred USD"]
+  },
+  "Claim Severity Views: Incurred Loss and Average Severity": {
+    "_note": "Harvest carried a bare dimension with zero metrics; dual measures per Phase-2 matrix.",
+    "mark": "bar",
+    "columns": ["Severity Band"],
+    "rows": ["Total Incurred USD", "Avg Severity"]
+  }
+}

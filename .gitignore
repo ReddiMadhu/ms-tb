@@ -86,14 +86,15 @@ htmlcov/
 *.db-journal
 *.db-shm
 *.db-wal
-artifacts/
-backend/artifacts/
+artifacts/*
+backend/artifacts/*
 *.hyper
 *.twbx
 *.tdsx
-# Keep golden templates or schema files if explicitly version-controlled
+# Keep golden templates, schema files, or binding overrides if explicitly version-controlled
 !**/templates/*.twb
 !**/templates/*.tds
+!**/visual_binding_overrides.json
 
 # ==============================================================================
 # IDE & Operating System Files
