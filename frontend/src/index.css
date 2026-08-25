@@ -995,8 +995,8 @@ body {
 
 /* ── Gradient page header ──────────────────────────────────────── */
 .page-header-gradient {
-  padding: 28px 0;
-  margin-bottom: 28px;
+  padding: 28px 0 0 0;
+  margin-bottom: 0;
   position: relative;
 }
 
