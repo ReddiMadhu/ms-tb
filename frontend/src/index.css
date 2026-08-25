@@ -1658,8 +1658,9 @@ body {
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
-  padding: 14px 20px;
+  padding: 8px 16px;
   box-shadow: var(--shadow-card);
+  margin-top: 16px;
   margin-bottom: 16px;
   overflow-x: auto;
 }
@@ -1691,8 +1692,8 @@ body {
 }
 
 .pipeline-step-circle {
-  width: 40px;
-  height: 40px;
+  width: 30px;
+  height: 30px;
   border-radius: var(--radius-full);
   display: flex;
   align-items: center;
@@ -1700,7 +1701,7 @@ body {
   background: var(--field);
   border: 2px solid var(--line-strong);
   color: var(--ink-3);
-  font-size: 0.875rem;
+  font-size: 0.75rem;
   transition: all 0.25s var(--ease-spring);
   position: relative;
 }
@@ -1709,7 +1710,7 @@ body {
   border-color: var(--primary);
   background: var(--primary-tint);
   color: var(--primary);
-  box-shadow: 0 0 0 4px var(--primary-tint);
+  box-shadow: 0 0 0 3px var(--primary-tint);
 }
 
 .pipeline-step-node.completed .pipeline-step-circle {
@@ -1722,7 +1723,7 @@ body {
   border-color: var(--blue);
   background: var(--blue-tint);
   color: var(--blue);
-  box-shadow: 0 0 0 4px var(--blue-tint);
+  box-shadow: 0 0 0 3px var(--blue-tint);
 }
 
 .pipeline-step-node.warning .pipeline-step-circle {
@@ -1738,8 +1739,8 @@ body {
 }
 
 .pipeline-step-label {
-  margin-top: 8px;
-  font-size: 0.8125rem;
+  margin-top: 4px;
+  font-size: 0.75rem;
   font-weight: 600;
   color: var(--ink-2);
   text-align: center;
@@ -1751,16 +1752,16 @@ body {
 }
 
 .pipeline-step-sub {
-  font-size: 0.6875rem;
+  font-size: 0.625rem;
   font-weight: 500;
   color: var(--ink-3);
-  margin-top: 2px;
+  margin-top: 1px;
 }
 
 .pipeline-step-substage {
   display: block;
-  margin-top: 3px;
-  font-size: 0.625rem;
+  margin-top: 2px;
+  font-size: 0.5625rem;
   font-weight: 600;
   color: var(--blue);
   text-align: center;
@@ -1786,7 +1787,7 @@ body {
   flex: 1;
   height: 2px;
   background: var(--line);
-  margin-top: 19px;
+  margin-top: 14px;
   margin-left: 6px;
   margin-right: 6px;
   z-index: 1;

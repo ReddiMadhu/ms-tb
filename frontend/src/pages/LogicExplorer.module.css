@@ -38,112 +38,74 @@
   color: var(--ink);
 }
 
-/* ── Toolbar & Tabs ── */
+/* ── Toolbar Header & Expand/Collapse Controls ── */
 .toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
   flex-wrap: wrap;
+  padding: 0.25rem 0;
 }
 
-.tabGroup {
+.toolbarTitleGroup {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.sectionTitle {
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--ink);
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  flex-wrap: wrap;
+  margin: 0;
 }
 
-.tabBtn {
+.badgeCount {
+  background: var(--blue-tint, rgba(0, 168, 204, 0.15));
+  border: 1px solid var(--blue, rgba(0, 168, 204, 0.3));
+  color: var(--blue, #00a8cc);
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 12px;
+}
+
+.actionBtnGroup {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.actionBtn {
   display: inline-flex;
   align-items: center;
   gap: 0.45rem;
   background: var(--surface);
   border: 1px solid var(--line);
   color: var(--ink-2);
-  font-size: 0.8125rem;
-  font-weight: 600;
-  padding: 0.5rem 0.85rem;
+  font-size: 0.78125rem;
+  font-weight: 500;
+  padding: 0.4rem 0.8rem;
   border-radius: 6px;
   cursor: pointer;
   transition: all 0.15s ease;
 }
 
-.tabBtn:hover {
-  background: var(--surface-hover, rgba(255, 255, 255, 0.05));
-  color: var(--ink);
-}
-
-.tabBtnActive {
-  background: var(--blue-tint, rgba(0, 168, 204, 0.12));
+.actionBtn:hover {
+  background: var(--surface-hover, rgba(255, 255, 255, 0.08));
   border-color: var(--blue, #00a8cc);
-  color: var(--blue, #00a8cc);
-}
-
-.badgeCount {
-  background: var(--line);
-  color: var(--ink-2);
-  font-size: 0.6875rem;
-  padding: 2px 6px;
-  border-radius: 10px;
-}
-
-.tabBtnActive .badgeCount {
-  background: var(--blue-tint, rgba(0, 168, 204, 0.25));
-  color: var(--blue, #00a8cc);
-}
-
-.filterControls {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  flex-wrap: wrap;
-}
-
-.searchBox {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  background: var(--surface-alt, #0d1117);
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 0.4rem 0.75rem;
-  width: 260px;
-}
-
-.searchBox input {
-  background: transparent;
-  border: none;
   color: var(--ink);
-  outline: none;
-  font-size: 0.8125rem;
-  width: 100%;
 }
 
-.filterBox {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  background: var(--surface-alt, #0d1117);
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 0.4rem 0.75rem;
-}
-
-.filterBox select {
-  background: transparent;
-  border: none;
-  color: var(--ink);
-  outline: none;
-  font-size: 0.8125rem;
-  cursor: pointer;
-}
-
-/* ── Conversion Card List ── */
+/* ── Conversion Card List (Accordion) ── */
 .cardsList {
   display: flex;
   flex-direction: column;
-  gap: 1.25rem;
+  gap: 0.75rem;
 }
 
 .conversionCard {
@@ -153,11 +115,11 @@
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  transition: border-color 0.15s ease;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
 .conversionCard:hover {
-  border-color: var(--blue, #00a8cc);
+  border-color: var(--border-hover, #3b82f6);
 }
 
 .cardHeader {
@@ -165,10 +127,32 @@
   align-items: center;
   justify-content: space-between;
   padding: 0.75rem 1rem;
-  border-bottom: 1px solid var(--line);
   background: var(--surface-alt, rgba(0, 0, 0, 0.1));
   flex-wrap: wrap;
   gap: 0.5rem;
+}
+
+.cardHeaderClickable {
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.15s ease;
+}
+
+.cardHeaderClickable:hover {
+  background: var(--surface-hover, rgba(255, 255, 255, 0.04));
+}
+
+.chevronIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink-3);
+  margin-right: 2px;
+  transition: color 0.15s ease;
+}
+
+.cardHeaderClickable:hover .chevronIcon {
+  color: var(--blue, #00a8cc);
 }
 
 .cardTitleGroup {
@@ -194,22 +178,30 @@
   border: 1px solid var(--primary, rgba(99, 102, 241, 0.25));
 }
 
-.methodBadge {
-  font-size: 0.6875rem;
-  font-weight: 500;
-  padding: 2px 8px;
-  border-radius: 4px;
-  background: var(--green-tint, rgba(34, 197, 94, 0.12));
-  color: var(--green, #22c55e);
-  border: 1px solid var(--green, rgba(34, 197, 94, 0.25));
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.datasourceBadge {
+.aliasBadge {
   font-size: 0.6875rem;
   color: var(--ink-3);
+  font-style: italic;
+}
+
+.collapsedPreview {
+  font-size: 0.75rem;
+  color: var(--green-text, #a7f3d0);
+  background: rgba(34, 197, 94, 0.06);
+  border: 1px solid rgba(34, 197, 94, 0.2);
+  padding: 2px 8px;
+  border-radius: 4px;
+  max-width: 480px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+}
+
+.cardStatusGroup {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
 }
 
 .statusBadgeValid {
@@ -237,6 +229,7 @@
   align-items: stretch;
   gap: 0.75rem;
   padding: 1rem;
+  border-top: 1px solid var(--line);
 }
 
 @media (max-width: 900px) {
@@ -349,76 +342,6 @@
   color: var(--primary, #6366f1);
   flex-shrink: 0;
   margin-top: 2px;
-}
-
-/* ── Full Script Card ── */
-.fullSqlCard {
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-}
-
-.fullSqlHeader {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0.75rem 1.25rem;
-  background: var(--surface-alt, rgba(0, 0, 0, 0.1));
-  border-bottom: 1px solid var(--line);
-  flex-wrap: wrap;
-  gap: 0.75rem;
-}
-
-.fullSqlTitle {
-  font-size: 0.9375rem;
-  font-weight: 600;
-  color: var(--ink);
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.actionBtnGroup {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-}
-
-.actionBtn {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.45rem;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  color: var(--ink);
-  font-size: 0.78125rem;
-  font-weight: 500;
-  padding: 0.45rem 0.85rem;
-  border-radius: 6px;
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
-
-.actionBtn:hover {
-  background: var(--surface-hover, rgba(255, 255, 255, 0.08));
-  border-color: var(--blue, #00a8cc);
-}
-
-.fullSqlCodeBlock {
-  margin: 0;
-  padding: 1.25rem;
-  font-family: 'JetBrains Mono', 'Fira Code', monospace;
-  font-size: 0.8125rem;
-  line-height: 1.6;
-  color: var(--ink);
-  background: var(--surface-alt, #0d1117);
-  white-space: pre-wrap;
-  word-break: break-word;
-  max-height: 550px;
-  overflow-y: auto;
 }
 
 .emptyState {

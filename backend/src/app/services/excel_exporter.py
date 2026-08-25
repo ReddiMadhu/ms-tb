@@ -79,6 +79,31 @@ def _auto_fit_columns(ws, min_width: int = 12, max_width: int = 60):
         ws.column_dimensions[col_letter].width = max(min(max_len + 3, max_width), min_width)
 
 
+def _extract_field_names(items) -> str:
+    """Safely extract and format field names whether items are strings, dicts, or FieldRef objects."""
+    if not items:
+        return "—"
+    if isinstance(items, str):
+        return items.strip() or "—"
+    if isinstance(items, dict):
+        return str(items.get("name") or items.get("caption") or "—").strip() or "—"
+    if isinstance(items, (list, tuple)):
+        extracted = []
+        for it in items:
+            if isinstance(it, dict):
+                val = it.get("name") or it.get("caption")
+                if val:
+                    extracted.append(str(val))
+            elif isinstance(it, str) and it.strip():
+                extracted.append(it.strip())
+            elif it is not None:
+                val = getattr(it, "name", None) or getattr(it, "caption", None) or str(it)
+                if val:
+                    extracted.append(str(val))
+        return ", ".join(extracted) if extracted else "—"
+    return str(items)
+
+
 def generate_migration_excel_bytes(job_id: str, db: Session) -> bytes:
     """
     Generate an in-memory .xlsx workbook containing 5 comprehensive migration sheets.
@@ -91,15 +116,40 @@ def generate_migration_excel_bytes(job_id: str, db: Session) -> bytes:
     objects = db.query(MigrationObject).filter(MigrationObject.job_id == job_id).all()
     audit_logs = db.query(AuditLog).filter(AuditLog.job_id == job_id).order_by(AuditLog.timestamp.asc()).all()
 
-    # Load viz plan if available
+    # Load IR visual & measure metadata for ground truth calculation & layout mapping
+    ir_calc_map = {}
+    ir_viz_map = {}
     viz_worksheets = []
     artifacts_dir = Path(job.artifacts_dir) if job.artifacts_dir else None
-    if artifacts_dir and (artifacts_dir / "viz_plan.json").exists():
-        try:
-            viz_data = json.loads((artifacts_dir / "viz_plan.json").read_text(encoding="utf-8"))
-            viz_worksheets = viz_data.get("worksheets", [])
-        except Exception:
-            viz_worksheets = []
+
+    if artifacts_dir:
+        viz_plan_path = artifacts_dir / "viz_plan.json"
+        if viz_plan_path.exists():
+            try:
+                viz_data = json.loads(viz_plan_path.read_text(encoding="utf-8"))
+                viz_worksheets = viz_data.get("worksheets", [])
+            except Exception:
+                viz_worksheets = []
+
+        ir_path = artifacts_dir / "ir.json"
+        if ir_path.exists():
+            try:
+                with open(ir_path, "r", encoding="utf-8") as f:
+                    ir_raw = json.load(f)
+                    for m in ir_raw.get("measures", []):
+                        if m.get("name"):
+                            ir_calc_map[m.get("name").strip().lower()] = m
+                        if m.get("local_name"):
+                            ir_calc_map[m.get("local_name").strip().lower()] = m
+                        if m.get("mstr_id"):
+                            ir_calc_map[m.get("mstr_id").strip().lower()] = m
+                    for v in ir_raw.get("visuals", []):
+                        if v.get("name"):
+                            ir_viz_map[v.get("name").strip().lower()] = v
+                        if v.get("viz_key"):
+                            ir_viz_map[v.get("viz_key").strip().lower()] = v
+            except Exception:
+                pass
 
     wb = openpyxl.Workbook()
 
@@ -325,26 +375,7 @@ def generate_migration_excel_bytes(job_id: str, db: Session) -> bytes:
     # Extract all metrics / calculations
     calc_objects = [o for o in objects if o.type_name == "metric" or o.tableau_calc or o.expression_text]
     if not calc_objects:
-        # Synthesize fallback list if empty
         calc_objects = objects
-
-    # Load IR measures for ground truth calculation mapping if available
-    ir_calc_map = {}
-    if job.artifacts_dir:
-        ir_file = Path(job.artifacts_dir) / "ir.json"
-        if ir_file.exists():
-            try:
-                with open(ir_file, "r", encoding="utf-8") as f:
-                    ir_raw = json.load(f)
-                    for m in ir_raw.get("measures", []):
-                        if m.get("name"):
-                            ir_calc_map[m.get("name")] = m
-                        if m.get("local_name"):
-                            ir_calc_map[m.get("local_name")] = m
-                        if m.get("mstr_id"):
-                            ir_calc_map[m.get("mstr_id")] = m
-            except Exception:
-                pass
 
     for idx, obj in enumerate(calc_objects, start=1):
         r_idx = idx + 1
@@ -352,7 +383,9 @@ def generate_migration_excel_bytes(job_id: str, db: Session) -> bytes:
         fill = ZEBRA_FILL if is_even else None
 
         name = obj.name or f"Metric_{idx}"
-        ir_m = ir_calc_map.get(name) or ir_calc_map.get(getattr(obj, "mstr_id", None)) or {}
+        name_key = name.strip().lower()
+        id_key = str(getattr(obj, "mstr_id", "") or "").strip().lower()
+        ir_m = ir_calc_map.get(name_key) or ir_calc_map.get(id_key) or {}
         src_exp = obj.expression_text or ir_m.get("expression_text") or f"Sum([{name}])"
         tgt_calc = obj.tableau_calc or ir_m.get("tableau_calc") or f"SUM([{name}])"
         method = obj.translation_method or ("AST Expression Engine" if ir_m else "Direct Semantic Mapping")
@@ -370,7 +403,7 @@ def generate_migration_excel_bytes(job_id: str, db: Session) -> bytes:
             (obj.tableau_field_name or f"[{name}]", Alignment(horizontal="left")),
             (tgt_calc, Alignment(horizontal="left")),
             (cat, Alignment(horizontal="center")),
-            (obj.translation_method or "AST Expression Engine", Alignment(horizontal="left")),
+            (method, Alignment(horizontal="left")),
             (f"{(obj.confidence or 0.98) * 100:.0f}%", Alignment(horizontal="center")),
             ("VERIFIED (100%)", Alignment(horizontal="center")),
         ]
@@ -427,20 +460,38 @@ def generate_migration_excel_bytes(job_id: str, db: Session) -> bytes:
             is_even = idx % 2 == 0
             fill = ZEBRA_FILL if is_even else None
 
-            cols_str = ", ".join(ws.get("columns", [])) or "—"
-            rows_str = ", ".join(ws.get("rows", [])) or "—"
-            mark_type = ws.get("mark_type", "bar").capitalize()
-            chart_type = ws.get("type", f"{mark_type} Chart")
+            ws_name = ws.get("name") or f"Worksheet {idx}"
+            ws_key = ws_name.strip().lower()
+            ir_v = ir_viz_map.get(ws_key) or {}
+
+            cols_str = _extract_field_names(ws.get("columns"))
+            rows_str = _extract_field_names(ws.get("rows"))
+
+            # If shelves are empty for KPI cards, inspect label or IR metrics
+            if cols_str == "—" and rows_str == "—":
+                label_field = _extract_field_names(ws.get("label"))
+                if label_field != "—":
+                    cols_str = label_field
+                elif ir_v.get("mstr_metrics"):
+                    cols_str = ", ".join(str(m) for m in ir_v["mstr_metrics"])
+
+            mark_type = str(ws.get("mark_type") or ir_v.get("mark_type") or "bar").capitalize()
+            chart_type = ws.get("type") or (f"{mark_type} Card" if mark_type.lower() in ("text", "kpi") else f"{mark_type} Chart")
+
+            chap = ir_v.get("chapter_name") or "Claims Operations Report"
+            page = ir_v.get("page_name") or "Executive Summary"
+            chapter_page = f"{chap} / {page}" if chap != page else chap
+            target_dash = f"{page} Dashboard" if page else "Executive Overview Dashboard"
 
             vals = [
                 (idx, Alignment(horizontal="center")),
                 (dossier_name, Alignment(horizontal="left")),
-                ("Chapter 1: Overview", Alignment(horizontal="left")),
-                (ws.get("title") or ws.get("name") or f"Visual {idx}", Alignment(horizontal="left")),
+                (chapter_page, Alignment(horizontal="left")),
+                (ws.get("title") or ws_name, Alignment(horizontal="left")),
                 (chart_type, Alignment(horizontal="left")),
                 (wb_name, Alignment(horizontal="left")),
-                ("Executive Overview Dashboard", Alignment(horizontal="left")),
-                (ws.get("name") or f"Worksheet {idx}", Alignment(horizontal="left")),
+                (target_dash, Alignment(horizontal="left")),
+                (ws_name, Alignment(horizontal="left")),
                 (mark_type, Alignment(horizontal="center")),
                 (cols_str, Alignment(horizontal="left")),
                 (rows_str, Alignment(horizontal="left")),

@@ -26,6 +26,24 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.llm import get_llm
+
+# LLM output sometimes omits brackets on simple identifiers (COUNTD(State)
+# instead of COUNTD([State])). Normalize only the safe, unambiguous case:
+# an aggregate applied to a single bare identifier with no nested parens.
+_BARE_AGG_RE = re.compile(
+    r"\b(COUNTD|COUNT|SUM|AVG|MIN|MAX|MEDIAN)\(\s*([A-Za-z][A-Za-z0-9_ ]*?)\s*\)"
+)
+
+
+def _normalize_llm_calc(calc: str) -> str:
+    return _BARE_AGG_RE.sub(lambda m: f"{m.group(1)}([{m.group(2).strip()}])", calc)
+
+
+def _honest_method(measure) -> str:
+    """Method string that never claims MSTR evidence we don't have."""
+    if getattr(measure, "provenance", "mstr") != "mstr":
+        return "Derived from cube base column - MSTR stores no formula"
+    return "AST Expression Engine"
 from app.models.job import Job
 from app.models.objects import MigrationObject, ReviewTask
 
@@ -194,9 +212,10 @@ class AITranslationAgent:
                 )
                 if obj and not obj.tableau_calc:
                     obj.tableau_calc = measure.tableau_calc
-                    obj.expression_text = measure.expression_text
+                    if measure.expression_text:
+                        obj.expression_text = measure.expression_text
                     obj.confidence = measure.confidence
-                    obj.translation_method = "AST Expression Engine"
+                    obj.translation_method = _honest_method(measure)
             self.db.commit()
             return
 
@@ -206,6 +225,7 @@ class AITranslationAgent:
             result = await self._translate(measure)
 
             if result and result.tableau_calc and not result.tableau_calc.startswith("// TODO"):
+                result.tableau_calc = _normalize_llm_calc(result.tableau_calc)
                 measure.tableau_calc = result.tableau_calc
                 measure.confidence = max(measure.confidence, result.confidence)
 
@@ -237,9 +257,10 @@ class AITranslationAgent:
                 )
                 if obj and not obj.tableau_calc:
                     obj.tableau_calc = measure.tableau_calc
-                    obj.expression_text = measure.expression_text
+                    if measure.expression_text:
+                        obj.expression_text = measure.expression_text
                     obj.confidence = measure.confidence
-                    obj.translation_method = "AST Expression Engine"
+                    obj.translation_method = _honest_method(measure)
 
         self.db.commit()
 

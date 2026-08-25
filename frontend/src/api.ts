@@ -430,6 +430,9 @@ export const api = {
         filters: Array<{ field_name: string }>;
         tooltip_fields: Array<{ name: string; field_type: string }>;
         is_failed: boolean;
+        failure_reason?: string | null;
+        /** Harvested MSTR visualizationType (e.g. 'bar_chart') from visual_defs, when available. */
+        mstr_visual_type?: string | null;
       }>;
       dashboards: Array<{
         id: string;

@@ -182,6 +182,41 @@ TABLEAU_VERSION = "18.1"
 TABLEAU_SOURCE_BUILD = "2024.2.0"
 TWB_XML_NS = "http://www.tableau.com"
 
+
+class _DateInstanceSpec:
+    """One Tableau date representation: derivation + the pill identity.
+
+    A single spec feeds BOTH the <column-instance> declaration and every
+    shelf reference, so they can never diverge (the D2E8DA72 class of bug).
+    """
+
+    __slots__ = ("derivation", "prefix", "field_type", "role_suffix")
+
+    def __init__(self, derivation: str, prefix: str, field_type: str, role_suffix: str):
+        self.derivation = derivation
+        self.prefix = prefix
+        self.field_type = field_type
+        self.role_suffix = role_suffix
+
+    def instance_name(self, dim_name: str) -> str:
+        return f"[{self.prefix}:{dim_name}:{self.role_suffix}]"
+
+    def pill(self, dim_name: str) -> str:
+        return f"[federated.default].{self.instance_name(dim_name)}"
+
+
+# Granularity -> Tableau representation. 'month' renders month buckets on an
+# ordinal axis; pair with a Year pill (granularity 'year') if cross-year
+# separation is required for a given dashboard.
+_DATE_GRANULARITY_MAP = {
+    "month": _DateInstanceSpec("Month", "mn", "ordinal", "ok"),
+    "year": _DateInstanceSpec("Year", "yr", "ordinal", "ok"),
+    "plain": _DateInstanceSpec("None", "none", "nominal", "nk"),
+}
+
+# Per-dimension overrides; anything absent defaults to 'month'.
+DATE_GRANULARITY: dict = {}
+
 # Valid Tableau mark class values (case-sensitive)
 MARK_CLASS_MAP = {
     "text": "Text",
@@ -236,14 +271,14 @@ class TableauEmitterAgent:
 
         # Contract gate: the emitted TWB binds [Extract].[Extract]. Any real
         # Hyper file (>4 KB; tiny files are test dummies) MUST contain that
-        # table, or Tableau fails with "extract does not contain a schema
-        # 'Extract'". Refuse to package a mismatched pair.
+        # table with compatible column types. Refuse to package a mismatched pair.
         for _dom, _hpath in (hyper_paths or {}).items():
             try:
                 _hp = Path(_hpath)
                 if not _hp.exists() or _hp.stat().st_size <= 4096:
                     continue  # absent/placeholder — orchestrator already flagged
-                from tableauhyperapi import HyperProcess, Telemetry, Connection
+                from tableauhyperapi import HyperProcess, Telemetry, Connection, TableName
+                from app.utils.sql_types import format_contract_mismatch
                 with HyperProcess(telemetry=Telemetry.DO_NOT_SEND_USAGE_DATA_TO_TABLEAU) as _hyp:
                     with Connection(endpoint=_hyp.endpoint, database=str(_hp)) as _conn:
                         _tables = [
@@ -251,23 +286,49 @@ class TableauEmitterAgent:
                             for _s in _conn.catalog.get_schema_names()
                             for tn in _conn.catalog.get_table_names(_s)
                         ]
-                if "Extract.Extract" not in _tables:
-                    from app.models.objects import Issue as IssueModel
-                    self.db.add(IssueModel(
-                        job_id=self.job.id,
-                        object_id=self.job.id,
-                        severity="blocker",
-                        category="hyper",
-                        message=(
-                            f"Refusing to package workbook '{workbook_name}': Hyper "
-                            f"'{_hpath}' lacks table [Extract].[Extract] "
-                            f"(contains: {_tables or 'none'}). Rebuild the extract."
-                        ),
-                    ))
-                    self.db.commit()
-                    raise ValueError(
-                        f"Hyper contract violation: {_hpath} lacks [Extract].[Extract]"
-                    )
+                        if "Extract.Extract" not in _tables:
+                            from app.models.objects import Issue as IssueModel
+                            self.db.add(IssueModel(
+                                job_id=self.job.id,
+                                object_id=self.job.id,
+                                severity="blocker",
+                                category="hyper",
+                                message=(
+                                    f"Refusing to package workbook '{workbook_name}': Hyper "
+                                    f"'{_hpath}' lacks table [Extract].[Extract] "
+                                    f"(contains: {_tables or 'none'}). Rebuild the extract."
+                                ),
+                            ))
+                            self.db.commit()
+                            raise ValueError(
+                                f"Hyper contract violation: {_hpath} lacks [Extract].[Extract]"
+                            )
+
+                        if ir and hasattr(ir, "dimensions"):
+                            _expected = {
+                                getattr(d, "local_name", getattr(d, "name", "")): getattr(d, "data_type", "")
+                                for d in ir.dimensions
+                                if getattr(d, "local_name", getattr(d, "name", "")) and getattr(d, "data_type", "")
+                            }
+                            _tdef = _conn.catalog.get_table_definition(TableName("Extract", "Extract"))
+                            _actual = {_c.name.unescaped: str(_c.type) for _c in _tdef.columns}
+                            _mismatch = format_contract_mismatch(_actual, _expected)
+                            if _mismatch:
+                                from app.models.objects import Issue as IssueModel
+                                self.db.add(IssueModel(
+                                    job_id=self.job.id,
+                                    object_id=self.job.id,
+                                    severity="blocker",
+                                    category="hyper",
+                                    message=(
+                                        f"Refusing to package workbook '{workbook_name}': Hyper extract "
+                                        f"'{_hpath}' has schema type mismatch ({_mismatch}). Rebuild the extract."
+                                    ),
+                                ))
+                                self.db.commit()
+                                raise ValueError(
+                                    f"Hyper contract violation: {_hpath} schema mismatch ({_mismatch})"
+                                )
             except ValueError:
                 raise
             except Exception:
@@ -334,13 +395,28 @@ class TableauEmitterAgent:
 
         # Step 5: Add windows
         windows_node = etree.SubElement(root, "windows")
+        # Structural KPI detection (evidence: an emitted sheet with EMPTY
+        # rows/columns shelves and a Text mark IS a KPI number card by
+        # construction). Replaces the old name-keyword guess that left
+        # 'Regions'/'States' on fit-width and pinned tiny numbers top-right.
+        kpi_ws_names = {
+            ws.name for ws in viz_plan.worksheets
+            if not ws.is_failed and not (ws.rows or ws.columns)
+            and (getattr(ws, "mark_type", "") or "").lower() == "text"
+        }
         active_set = False
         for ws_spec in viz_plan.worksheets:
             if not ws_spec.is_failed:
-                self._emit_window(windows_node, ws_spec.name, is_active=not active_set)
+                self._emit_window(
+                    windows_node, ws_spec.name,
+                    is_active=not active_set, kpi_names=kpi_ws_names,
+                )
                 active_set = True
         for dash_spec in viz_plan.dashboards:
-            self._emit_window(windows_node, dash_spec.name, is_dashboard=True, dash_spec=dash_spec)
+            self._emit_window(
+                windows_node, dash_spec.name,
+                is_dashboard=True, dash_spec=dash_spec, kpi_names=kpi_ws_names,
+            )
 
         # Step 6: Write TWB
         twb_path = twb_dir / f"{workbook_name}.twb"
@@ -855,6 +931,7 @@ class TableauEmitterAgent:
             ds_deps = etree.SubElement(view, "datasource-dependencies", attrib={
                 "datasource": "federated.default",
             })
+            date_instances = {}
             for dim_name in used_dims:
                 ir_dtype = dim_type_map.get(dim_name, "string")
                 is_date = ir_dtype in ("date", "datetime", "timestamp")
@@ -865,12 +942,22 @@ class TableauEmitterAgent:
                         "role": "dimension",
                         "type": "ordinal",
                     })
+                    # Date granularity is translated to its Tableau
+                    # representation BEFORE XML generation, and the SAME
+                    # instance spec feeds both the column-instance here and
+                    # the shelf pill later — they can never diverge.
+                    #   month -> derivation="Month",  pill [mn:<d>:ok]
+                    #   year  -> derivation="Year",   pill [yr:<d>:ok]
+                    #   plain -> derivation="None",   pill [none:<d>:nk]
+                    gran = DATE_GRANULARITY.get(dim_name, "month")
+                    inst = _DATE_GRANULARITY_MAP[gran]
+                    date_instances[dim_name] = inst
                     etree.SubElement(ds_deps, "column-instance", attrib={
                         "column": f"[{dim_name}]",
-                        "derivation": "MY",
-                        "name": f"[my:{dim_name}:ok]",
+                        "derivation": inst.derivation,
+                        "name": inst.instance_name(dim_name),
                         "pivot": "key",
-                        "type": "ordinal",
+                        "type": inst.field_type,
                     })
                     etree.SubElement(ds_deps, "column-instance", attrib={
                         "column": f"[{dim_name}]",
@@ -919,8 +1006,17 @@ class TableauEmitterAgent:
 
         etree.SubElement(view, "aggregation", attrib={"value": "true"})
 
-        # 2. style
-        etree.SubElement(table, "style")
+        # 2. style — KPI text cards (no shelves, single big number) get a
+        # readable mark font; everything else keeps Tableau defaults.
+        style_el = etree.SubElement(table, "style")
+        _is_kpi_card = (
+            not ws_spec.rows and not ws_spec.columns
+            and (getattr(ws_spec, "mark_type", "") or "").lower() == "text"
+        )
+        if _is_kpi_card:
+            rule = etree.SubElement(style_el, "style-rule", attrib={"element": "mark"})
+            etree.SubElement(rule, "format", attrib={"attr": "font-size", "value": "24"})
+            etree.SubElement(rule, "format", attrib={"attr": "font-weight", "value": "bold"})
 
         # 3. panes
         panes = etree.SubElement(table, "panes")
@@ -930,6 +1026,12 @@ class TableauEmitterAgent:
         raw_mark = ws_spec.mark_type or "automatic"
 
         # Primary Pane (id="0")
+        # NOTE: no y-axis-name/x-axis-name here. Genuine dual-axis files carry
+        # them, but empirically (job 2281d8a3 probe matrix) Tableau 2026.1
+        # raises Internal Error 6EA18A9E on ours unless the multi-measure
+        # shelf expression is parenthesized — and G1 proved parenthesization
+        # ALONE renders stacked measures correctly without any axis attrs.
+        # Minimal proven-safe shape wins.
         pane = etree.SubElement(panes, "pane", attrib={"id": "0"})
         pane_view = etree.SubElement(pane, "view")
         etree.SubElement(pane_view, "breakdown", attrib={"value": "auto"})
@@ -996,7 +1098,11 @@ class TableauEmitterAgent:
                 else:
                     _, pill_full, _ = _get_meas_pill_info(r.name, r)
                     row_pills.append(pill_full)
-            rows_el.text = " + ".join(row_pills)
+            # Multi-measure shelves MUST be parenthesized: Desktop's layout
+            # parser drops (and previously crashed on) bare 'A + B' rows.
+            # Genuine dual-axis files write '(A + B)' — probe G1 confirmed.
+            joined = " + ".join(row_pills)
+            rows_el.text = f"({joined})" if len(row_pills) > 1 else joined
 
         # 5. cols
         cols_el = etree.SubElement(table, "cols")
@@ -1005,17 +1111,22 @@ class TableauEmitterAgent:
             ws_title_clean = (ws_spec.name or "").lower()
             for c in ws_spec.columns:
                 if c.field_type == "dimension":
-                    lower_c = str(c.name).lower()
                     ir_dtype_c = dim_type_map.get(c.name, "string")
                     is_date_dim = ir_dtype_c in ("date", "datetime", "timestamp")
-                    if is_date_dim and (is_combo_dual or raw_mark.lower() in ("line", "area", "combo") or "trend" in ws_title_clean or "monthly" in ws_title_clean):
-                        col_pills.append(f"[federated.default].[my:{c.name}:ok]")
+                    if is_date_dim:
+                        # SAME spec instance that declared the column-instance
+                        # above — declaration and reference cannot diverge.
+                        inst = date_instances.get(c.name) or _DATE_GRANULARITY_MAP[
+                            DATE_GRANULARITY.get(c.name, "month")
+                        ]
+                        col_pills.append(inst.pill(c.name))
                     else:
                         col_pills.append(f"[federated.default].[none:{c.name}:nk]")
                 else:
                     _, pill_full, _ = _get_meas_pill_info(c.name, c)
                     col_pills.append(pill_full)
-            cols_el.text = " + ".join(col_pills)
+            joined_cols = " + ".join(col_pills)
+            cols_el.text = f"({joined_cols})" if len(col_pills) > 1 else joined_cols
 
     def _emit_dashboard(self, parent, dash_spec, all_worksheets):
         """Emit a schema-valid <dashboard> element with all required XSD children and worksheet zones."""
@@ -1143,8 +1254,14 @@ class TableauEmitterAgent:
             "type": "table",
         })
 
-    def _emit_window(self, parent, name: str, is_dashboard: bool = False, is_active: bool = False, dash_spec = None):
-        """Emit a schema-valid <window> element with all required XSD children."""
+    def _emit_window(self, parent, name: str, is_dashboard: bool = False, is_active: bool = False, dash_spec = None, kpi_names = None):
+        """Emit a schema-valid <window> element with all required XSD children.
+
+        Zoom is structural: sheets that are KPI cards (empty shelves + Text
+        mark, membership supplied via `kpi_names`) fit the entire view so the
+        number centers; every other sheet keeps fit-width.
+        """
+        kpi_names = kpi_names or set()
         window = etree.SubElement(parent, "window", attrib={
             "class": "dashboard" if is_dashboard else "worksheet",
             "name": name,
@@ -1154,8 +1271,7 @@ class TableauEmitterAgent:
             if dash_spec and getattr(dash_spec, "worksheets", None):
                 for ws_name in dash_spec.worksheets:
                     vp = etree.SubElement(viewpoints, "viewpoint", attrib={"name": ws_name})
-                    is_kpi = any(k in ws_name.lower() for k in ["kpi", "card", "metric", "total", "avg", "count", "days", "rate", "paid", "reserve", "recovery", "loss", "claims", "amount"])
-                    zoom_type = "entire-view" if is_kpi else "fit-width"
+                    zoom_type = "entire-view" if ws_name in kpi_names else "fit-width"
                     etree.SubElement(vp, "zoom", attrib={"type": zoom_type})
             active_el = etree.SubElement(window, "active")
             active_el.set("id", "-1")
@@ -1167,8 +1283,7 @@ class TableauEmitterAgent:
             etree.SubElement(strip_left, "card", attrib={"type": "filters"})
             etree.SubElement(strip_left, "card", attrib={"type": "marks"})
             vp = etree.SubElement(window, "viewpoint", attrib={"name": name})
-            is_kpi = any(k in name.lower() for k in ["kpi", "card", "metric", "total", "avg", "count", "days", "rate", "paid", "reserve", "recovery", "loss", "claims", "amount"])
-            zoom_type = "entire-view" if is_kpi else "fit-width"
+            zoom_type = "entire-view" if name in kpi_names else "fit-width"
             etree.SubElement(vp, "zoom", attrib={"type": zoom_type})
 
     # ── Path rewriting (ADR-023) ────────────────────────────────

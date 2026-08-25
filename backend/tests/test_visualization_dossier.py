@@ -97,12 +97,14 @@ def test_smart_shelf_assignments(insurance_ir):
     # 1. KPI Card: Avg Resolution Days -> text mark, measure label
     kpi_res = ws_by_name["Avg Resolution Days"]
     assert kpi_res.mark_type == "text"
+    assert kpi_res.mstr_visual_type == "kpi"
     assert kpi_res.label is not None
     assert kpi_res.label.name == "Claim Resolution Time Days"
 
     # 2. Bar Chart: Total Claims by Loss Cause -> bar mark, Loss Cause on rows, Row Count / Incurred on columns
     bar_cause = ws_by_name["Total Claims by Loss Cause"]
     assert bar_cause.mark_type == "bar"
+    assert bar_cause.mstr_visual_type == "bar_chart"
     assert len(bar_cause.rows) == 1
     assert bar_cause.rows[0].name == "Loss Cause"
     assert len(bar_cause.columns) == 1
@@ -110,6 +112,7 @@ def test_smart_shelf_assignments(insurance_ir):
     # 3. Bar Chart: Top States By Incurred -> State Name on rows, Total Incurred on columns
     bar_states = ws_by_name["Top States By Incurred"]
     assert bar_states.mark_type == "bar"
+    assert bar_states.mstr_visual_type == "bar_chart"
     assert bar_states.rows[0].name == "State Name"
     assert bar_states.columns[0].name == "Total Incurred USD"
 
@@ -118,6 +121,7 @@ def test_smart_shelf_assignments(insurance_ir):
     #    renders a pie as detached bubbles on an axis — job 087560ee audit).
     donut = ws_by_name["Claim Status Mix"]
     assert donut.mark_type == "pie"
+    assert donut.mstr_visual_type == "donut_chart"
     assert donut.color is not None
     assert donut.color.name == "Claim Status"
     assert donut.size is not None
@@ -127,6 +131,7 @@ def test_smart_shelf_assignments(insurance_ir):
     # 5. Trend: Loss Trend -> line or bar mark, Reported Date on columns
     trend = ws_by_name["Loss Trend: Monthly Claims and Incurred Amount"]
     assert trend.mark_type in ("line", "bar")
+    assert trend.mstr_visual_type == "combo_chart"
     assert any("Date" in (c.name or "") for c in trend.columns) or any("Date" in (r.name or "") for r in trend.rows)
 
 

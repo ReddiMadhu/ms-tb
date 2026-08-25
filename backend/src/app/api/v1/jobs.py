@@ -165,6 +165,92 @@ async def get_viz_plan(job_id: str, db: Session = Depends(get_db)):
         return {"worksheets": [], "dashboards": []}
 
     data = _json.loads(viz_path.read_text(encoding="utf-8"))
+
+    # Multi-source resolution for REAL MSTR visualization types
+    # 1. From ir.json (highest fidelity from IRVisual)
+    ir_path = Path(settings.artifacts_dir) / job_id / "ir.json"
+    ir_type_by_key: dict = {}
+    ir_type_by_name: dict = {}
+    if ir_path.exists():
+        try:
+            ir_data = _json.loads(ir_path.read_text(encoding="utf-8"))
+            for v in ir_data.get("visuals", []) or []:
+                if isinstance(v, dict):
+                    v_type = v.get("mark_type")
+                    if v_type:
+                        if v.get("viz_key"):
+                            ir_type_by_key[str(v["viz_key"]).strip().lower()] = v_type
+                        if v.get("name"):
+                            ir_type_by_name[str(v["name"]).strip().lower()] = v_type
+        except Exception:
+            pass
+
+    # 2. From visual_defs/*.json (deep inspection of definition)
+    vd_dir = Path(settings.artifacts_dir) / job_id / "visual_defs"
+    vd_type_by_key: dict = {}
+    vd_type_by_name: dict = {}
+    if vd_dir.is_dir():
+        for f in vd_dir.glob("*.json"):
+            try:
+                d = _json.loads(f.read_text(encoding="utf-8"))
+                vtype = (
+                    d.get("visualizationType")
+                    or d.get("result", {}).get("definition", {}).get("visualizationType")
+                    or d.get("definition", {}).get("visualizationType")
+                )
+                vname = (
+                    d.get("name")
+                    or d.get("result", {}).get("definition", {}).get("name")
+                    or d.get("definition", {}).get("name")
+                )
+                vkey = d.get("key") or f.stem
+                if vtype:
+                    if vkey:
+                        vd_type_by_key[str(vkey).strip().lower()] = vtype
+                    if vname:
+                        vd_type_by_name[str(vname).strip().lower()] = vtype
+            except Exception:
+                continue
+
+    # 3. From MigrationObject dossier definition in database
+    db_type_by_key: dict = {}
+    db_type_by_name: dict = {}
+    try:
+        from app.models.objects import MigrationObject
+        dossier_obj = (
+            db.query(MigrationObject)
+            .filter(MigrationObject.job_id == job_id, MigrationObject.type_name == "dossier")
+            .first()
+        )
+        if dossier_obj and isinstance(dossier_obj.mstr_definition, dict):
+            for ch in dossier_obj.mstr_definition.get("chapters", []) or []:
+                for pg in (ch or {}).get("pages", []) or []:
+                    for vz in (pg or {}).get("visualizations", []) or []:
+                        v_type = vz.get("visualizationType")
+                        if v_type:
+                            if vz.get("key"):
+                                db_type_by_key[str(vz["key"]).strip().lower()] = v_type
+                            if vz.get("name"):
+                                db_type_by_name[str(vz["name"]).strip().lower()] = v_type
+    except Exception:
+        pass
+
+    for ws in data.get("worksheets", []) or []:
+        if isinstance(ws, dict):
+            if not ws.get("mstr_visual_type"):
+                ws_key = str(ws.get("viz_key") or "").strip().lower()
+                ws_name = str(ws.get("name") or "").strip().lower()
+                resolved_type = (
+                    ir_type_by_key.get(ws_key)
+                    or ir_type_by_name.get(ws_name)
+                    or vd_type_by_key.get(ws_key)
+                    or vd_type_by_name.get(ws_name)
+                    or db_type_by_key.get(ws_key)
+                    or db_type_by_name.get(ws_name)
+                )
+                if resolved_type:
+                    ws["mstr_visual_type"] = resolved_type
+
     return data
 
 

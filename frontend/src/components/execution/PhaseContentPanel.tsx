@@ -40,10 +40,10 @@ export const PhaseContentPanel: React.FC<PhaseContentPanelProps> = ({
   const ActiveSubView = SUB_VIEW_MAP[currentTabKey];
 
   return (
-    <div className="phase-content-panel">
+    <div style={{ background: 'transparent', border: 'none', boxShadow: 'none', margin: 0, padding: 0 }}>
       {/* Sub-View Tabs (hidden if only 1 subview or if phase is currently loading) */}
       {!isPhaseLoading && phase.subViews.length > 1 && (
-        <div className="phase-tabs" style={{ marginTop: 0 }}>
+        <div className="phase-tabs" style={{ marginTop: 0, marginBottom: '16px' }}>
           {phase.subViews.map(sv => (
             <button
               key={sv.key}
@@ -57,33 +57,31 @@ export const PhaseContentPanel: React.FC<PhaseContentPanelProps> = ({
         </div>
       )}
 
-      {/* Sub-View Content */}
-      <div className="phase-tab-content">
-        {isPhaseLoading ? (
-          <div
-            style={{
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              justifyContent: 'center',
-              minHeight: '320px',
-              gap: '16px',
-              color: 'var(--ink-2)',
-              background: 'var(--surface)',
-              border: '1px solid var(--line)',
-              borderRadius: 'var(--radius-lg)',
-              padding: '40px 20px',
-            }}
-          >
-            <Loader2 size={36} className="spin-icon" style={{ color: 'var(--primary, #6366f1)' }} />
-            <span style={{ fontSize: '0.9375rem', fontWeight: 500 }}>
-              Loading data for this phase...
-            </span>
-          </div>
-        ) : (
-          ActiveSubView && <ActiveSubView />
-        )}
-      </div>
+      {/* Sub-View Content — rendered directly with no extra container padding/margin/background */}
+      {isPhaseLoading ? (
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            minHeight: '320px',
+            gap: '16px',
+            color: 'var(--ink-2)',
+            background: 'var(--surface)',
+            border: '1px solid var(--line)',
+            borderRadius: 'var(--radius-lg)',
+            padding: '40px 20px',
+          }}
+        >
+          <Loader2 size={36} className="spin-icon" style={{ color: 'var(--primary, #6366f1)' }} />
+          <span style={{ fontSize: '0.9375rem', fontWeight: 500 }}>
+            Loading data for this phase...
+          </span>
+        </div>
+      ) : (
+        ActiveSubView && <ActiveSubView />
+      )}
     </div>
   );
 };

@@ -56,15 +56,15 @@ export const PipelineStepper: React.FC<PipelineStepperProps> = ({
               >
                 <div className="pipeline-step-circle" style={{ '--phase-color': phase.color } as React.CSSProperties}>
                   {status === 'COMPLETED' ? (
-                    <Check size={20} strokeWidth={2.5} />
+                    <Check size={16} strokeWidth={2.5} />
                   ) : status === 'RUNNING' ? (
-                    <Loader2 size={20} className="spin-icon" />
+                    <Loader2 size={16} className="spin-icon" />
                   ) : status === 'FAILED' ? (
-                    <XCircle size={20} />
+                    <XCircle size={16} />
                   ) : status === 'WARNING' ? (
-                    <AlertTriangle size={20} />
+                    <AlertTriangle size={16} />
                   ) : (
-                    <IconComponent size={20} />
+                    <IconComponent size={16} />
                   )}
                 </div>
                 <span className="pipeline-step-label">{phase.title}</span>

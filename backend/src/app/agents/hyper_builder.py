@@ -577,16 +577,7 @@ class HyperAgent:
                 NULLABLE,
             )
 
-            TYPE_MAP = {
-                "VARCHAR": SqlType.text(),
-                "INTEGER": SqlType.int(),
-                "BIGINT": SqlType.big_int(),
-                "DOUBLE": SqlType.double(),
-                "DATE": SqlType.date(),
-                "TIME": SqlType.time(),
-                "TIMESTAMP": SqlType.timestamp(),
-                "BOOLEAN": SqlType.bool(),
-            }
+            from app.utils.sql_types import sql_type_for
 
             with HyperProcess(telemetry=Telemetry.DO_NOT_SEND_USAGE_DATA) as hyper:
                 with Connection(
@@ -597,7 +588,7 @@ class HyperAgent:
                     for table_plan in table_plans:
                         columns = []
                         for col in table_plan.columns:
-                            sql_type = TYPE_MAP.get(col.data_type, SqlType.text())
+                            sql_type = sql_type_for(col.data_type)
                             nullability = NOT_NULLABLE if col.is_key else NULLABLE
                             columns.append(
                                 TableDefinition.Column(col.column_name, sql_type, nullability)

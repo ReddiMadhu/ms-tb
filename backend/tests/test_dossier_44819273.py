@@ -82,8 +82,17 @@ def test_real_dossier_viz_plan_generation(real_dossier_ir):
     # (artifacts/visual_binding_overrides.json) — never by code-side guessing.
     # With that artifact present, every visual binds and lands on a dashboard,
     # restoring MSTR's original per-page counts (16/10/7/7/5).
+    #
+    # ONE further sheet is expected to fail: "Litigation Incurred Loss" is a
+    # genuine MSTR-side binding slip — harvest artifact W345.json binds the
+    # metric Sum (Salvage) under that title while the bundle also carries a
+    # measure named exactly "Litigation Incurred Loss". The honesty gate
+    # (exact title↔measure match) flags it Review Needed; the verbatim MSTR
+    # binding stays in the plan as evidence.
     failed = [ws.name for ws in viz_plan.worksheets if ws.is_failed]
-    assert failed == [], f"unbound visuals not covered by human overrides: {failed}"
+    assert failed == ["Litigation Incurred Loss"], (
+        f"unexpected failures {failed} (or slip flag regressed)"
+    )
     total_bound = sum(len(d.worksheets) for d in viz_plan.dashboards)
     assert total_bound == len(viz_plan.worksheets) == 45
     assert len(dash_map["Executive Summary"].worksheets) == 16
@@ -214,9 +223,13 @@ async def test_real_dossier_tableau_emitter_twb_xml(db_session, tmp_path, real_d
         assert formula is not None and len(formula.strip()) > 0
 
     # 2. Check all Worksheets — human binding overrides rescue the 10
-    # evidence-less visuals, so all 45 planned worksheets are emitted.
+    # evidence-less visuals; the honesty gate excludes exactly ONE sheet,
+    # "Litigation Incurred Loss" (MSTR-side binding slip: W345.json binds
+    # Sum (Salvage) under that title). 44 worksheets are emitted.
     worksheets = root.findall(".//worksheets/worksheet")
-    assert len(worksheets) == 45
+    assert len(worksheets) == 44
+    emitted_names = {ws.get("name") for ws in worksheets}
+    assert "Litigation Incurred Loss" not in emitted_names
 
     for ws in worksheets:
         ws_name = ws.get("name")

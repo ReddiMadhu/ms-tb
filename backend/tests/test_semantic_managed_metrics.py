@@ -251,11 +251,16 @@ class TestBuildManagedMetricDef:
         assert result.confidence == 0.85
 
     def test_expression_text_not_none(self, agent, db_session, insurance_job):
+        """ADR (provenance honesty): with no MSTR-supplied formula the
+        MeasureDef must NOT fabricate one — expression_text stays None,
+        provenance is 'derived', and the derived calc still lands in
+        precomputed_calc for emission."""
         mid, name = REAL_MANAGED_METRICS[0]
         obj = _seed_metric(db_session, insurance_job, mid, name, _managed_stub(mid, name))
         result = agent._build_managed_metric_def(obj, _managed_stub(mid, name))
-        assert result.expression_text is not None
-        assert "SUM" in result.expression_text.upper()
+        assert result.expression_text is None
+        assert getattr(result, "provenance", "mstr") == "derived"
+        assert "SUM" in (result.precomputed_calc or "").upper()
 
     def test_precomputed_calc_all_metrics(self, agent, db_session, insurance_job):
         for mid, name in REAL_MANAGED_METRICS:
@@ -355,6 +360,9 @@ class TestSemanticRunBundle:
 
     @pytest.mark.asyncio
     async def test_8_measures_non_null_expression(self, db_session, insurance_job):
+        """ADR (provenance honesty): managed metrics with no MSTR formula get
+        provenance='derived' + a real precomputed_calc; expression_text stays
+        None instead of a fabricated 'SUM(name)' string."""
         _seed_all(db_session, insurance_job)
         mock = AsyncMock()
         mock.get_metric.side_effect = MSTRAPIError(500, "8004d72a", "/test")
@@ -365,7 +373,11 @@ class TestSemanticRunBundle:
 
         assert len(bundle.measures) == 8
         for m in bundle.measures:
-            assert m.expression_text is not None, f"{m.name!r}: expression_text=None"
+            assert m.expression_text is None, (
+                f"{m.name!r}: fabricated expression_text={m.expression_text!r}"
+            )
+            assert getattr(m, "provenance", "mstr") == "derived"
+            assert m.precomputed_calc, f"{m.name!r}: missing precomputed_calc"
             assert m.confidence >= 0.85, f"{m.name!r}: confidence={m.confidence}"
             assert not m.blocked
 

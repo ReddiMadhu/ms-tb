@@ -95,6 +95,9 @@ class WorksheetSpec:
     filters: list[FilterSpec] = field(default_factory=list)
     tooltip_fields: list[FieldRef] = field(default_factory=list)
     is_failed: bool = False
+    failure_reason: Optional[str] = None
+    mstr_visual_type: Optional[str] = None
+    viz_key: Optional[str] = None
 
 
 @dataclass
@@ -284,6 +287,7 @@ class VisualizationAgent:
                     datasource_ref="default",
                     mark_type="text",
                     rows=[FieldRef(name=measure.caption or measure.name, field_type="measure")],
+                    mstr_visual_type="kpi",
                 )
                 result.worksheets.append(ws)
 
@@ -313,6 +317,48 @@ class VisualizationAgent:
                     worksheets=ws_names,
                     layout="auto-tiled",
                 ))
+
+        # --- Title-vs-bound-measure honesty gate (central choke point) ---
+        # Runs over EVERY worksheet regardless of which build path produced
+        # it. Fires ONLY on an exact normalized match between the visual
+        # TITLE and a DIFFERENT bundle measure than the one bound — the
+        # unambiguous MSTR binding slip signature ("Litigation Incurred Loss"
+        # carrying "Sum (Salvage)"). Token-overlap heuristics misfire on
+        # alias pairs, so they are deliberately not used here. Keep the
+        # verbatim MSTR binding — that is the source evidence — but refuse
+        # to green-label it: flag Review Needed with the exact conflict.
+        import re as _re
+
+        def _norm(s):
+            return _re.sub(r"[\W_]+", " ", (s or "").lower()).strip()
+
+        measures = getattr(self.ir, "measures", None) or []
+        if measures:
+            for ws in result.worksheets:
+                if ws.is_failed:
+                    continue
+                bound = None
+                for ref in (ws.label, ws.color, ws.size,
+                            *(ws.rows or []), *(ws.columns or [])):
+                    if ref is not None and getattr(ref, "field_type", "") == "measure":
+                        bound = ref.name
+                        break
+                if not bound:
+                    continue
+                title_norm = _norm(ws.name)
+                if not title_norm:
+                    continue
+                for bm in measures:
+                    if _norm(bm.name) == title_norm and _norm(bm.name) != _norm(bound):
+                        ws.is_failed = True
+                        ws.failure_reason = (
+                            f"Visual '{ws.name}' bound measure '{bound}', but MSTR "
+                            f"bundle contains a measure of the identical name "
+                            f"'{bm.name}' — likely an MSTR binding slip. Source "
+                            f"binding left unchanged as verbatim evidence."
+                        )
+                        logger.warning(ws.failure_reason)
+                        break
 
         logger.info(
             "VizPlan: %d worksheets, %d dashboards",
@@ -494,6 +540,7 @@ class VisualizationAgent:
         # Unresolvable â‡’ worksheet marked FAILED (honest skip) â€” a missing
         # chart is auditable; a wrongly-bound chart silently lies.
         ws_failed = False
+        primary_meas = None
         if not rows and not columns and not label and not color:
             v_metrics = [m for m in (getattr(visual, "mstr_metrics", None) or []) if m]
             v_attrs = [a for a in (getattr(visual, "mstr_attributes", None) or []) if a]
@@ -661,6 +708,10 @@ class VisualizationAgent:
         for f in getattr(visual, "filters", []):
             filters.append(FilterSpec(field_name=f))
 
+        # NOTE: the title-vs-bound-measure honesty gate lives centrally at the
+        # end of plan(), because real dossiers build most sheets through the
+        # explicit-selector-shelf path above, which never reaches this
+        # inference block.
         return WorksheetSpec(
             id=str(uuid.uuid4()),
             name=visual.name or "Sheet",
@@ -674,5 +725,7 @@ class VisualizationAgent:
             detail=detail,
             filters=filters,
             is_failed=ws_failed,
+            mstr_visual_type=getattr(visual, "mark_type", None) or raw_type,
+            viz_key=getattr(visual, "viz_key", None),
         )
 

@@ -81,6 +81,7 @@ class MeasureDef:
     blocked: bool = False
     block_reason: Optional[str] = None
     precomputed_calc: Optional[str] = None  # Pre-derived Tableau calc (managed metrics, ADR-032)
+    provenance: str = "mstr"  # "mstr" = formula quoted from MSTR; "derived" = synthesized here (no stored MSTR formula)
 
 
 @dataclass
@@ -196,7 +197,12 @@ class SemanticAgent:
                     bundle.measures.append(measure)
                     obj.confidence = measure.confidence
                     obj.status = "blocked" if measure.blocked else "extracted"
-                    obj.expression_text = measure.expression_text
+                    if measure.expression_text:
+                        obj.expression_text = measure.expression_text
+                    if getattr(measure, "provenance", "mstr") != "mstr":
+                        obj.translation_method = (
+                            "Derived from cube base column - MSTR stores no formula"
+                        )
 
                     if measure.blocked:
                         issue = Issue(
@@ -459,6 +465,10 @@ class SemanticAgent:
         Build a MeasureDef for a managed metric using dataset mx formulas and cube metadata.
         """
         f_str = obj.expression_text or detail.get("f") or detail.get("formula") or detail.get("expression") or ""
+        # Provenance: only a non-empty MSTR-supplied formula counts as quoted
+        # evidence; anything else is OUR derived subtotal default and must be
+        # labeled as such, never shown as a MicroStrategy expression.
+        had_f = bool(str(f_str or "").strip())
         agg_func = detail.get("aggFunc")
         nf = detail.get("nf") or detail.get("onf") or detail.get("format")
 
@@ -508,7 +518,9 @@ class SemanticAgent:
             mstr_id=obj.mstr_id,
             name=obj.name,
             expression_ast=detail.get("mexp"),
-            expression_text=f_str or f"{subtotal_type}({obj.name})",
+            # Never persist a synthesized formula as if MSTR supplied it.
+            expression_text=(str(f_str).strip() if had_f else None),
+            provenance=("mstr" if had_f else "derived"),
             precomputed_calc=tableau_calc,
             dimty=None,
             conditionality=None,

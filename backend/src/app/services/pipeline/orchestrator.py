@@ -1025,15 +1025,16 @@ class PipelineOrchestrator:
         hyper_dir = os.path.join(artifacts_dir, "hyper")
         os.makedirs(hyper_dir, exist_ok=True)
 
-        def _verify_hyper_contract(path) -> tuple[bool, str]:
+        def _verify_hyper_contract(path, expected_types: Optional[dict[str, str]] = None) -> tuple[bool, str]:
             """The TWB binds ONE flattened table: [Extract].[Extract]. Any Hyper
-            file entering this pipeline MUST contain it — a cached legacy
-            extract or a half-written file otherwise ships a workbook that
-            fails in Tableau with 'extract does not contain a schema Extract'."""
+            file entering this pipeline MUST contain it with compatible column types —
+            a cached legacy extract or a mistyped rebuild otherwise ships a workbook
+            that fails in Tableau (e.g. TEXT-typed date columns triggering Error 6EA18A9E)."""
             if not os.path.exists(path):
                 return False, "file does not exist"
             try:
-                from tableauhyperapi import HyperProcess, Telemetry, Connection
+                from tableauhyperapi import HyperProcess, Telemetry, Connection, TableName
+                from app.utils.sql_types import format_contract_mismatch
                 with HyperProcess(telemetry=Telemetry.DO_NOT_SEND_USAGE_DATA_TO_TABLEAU) as hp:
                     with Connection(endpoint=hp.endpoint, database=str(path)) as conn:
                         names = [
@@ -1041,12 +1042,21 @@ class PipelineOrchestrator:
                             for s in conn.catalog.get_schema_names()
                             for tn in conn.catalog.get_table_names(s)
                         ]
-                        if "Extract.Extract" in names:
-                            return True, "contract satisfied"
-                        return False, f"tables found: {names or 'none'}"
+                        if "Extract.Extract" not in names:
+                            return False, f"tables found: {names or 'none'}"
+
+                        if expected_types:
+                            tdef = conn.catalog.get_table_definition(TableName("Extract", "Extract"))
+                            actual = {c.name.unescaped: str(c.type) for c in tdef.columns}
+                            mismatch = format_contract_mismatch(actual, expected_types)
+                            if mismatch:
+                                return False, mismatch
+
+                        return True, "contract satisfied"
             except Exception as ve:
                 # Cannot verify HERE (lib missing / sandbox) — downstream
                 # emitter re-checks before packaging; don't block the build.
+                logger.warning("Hyper contract verification unavailable in this environment: %s", ve)
                 return True, f"verification unavailable: {ve}"
 
         def _reject_bad_hyper(path, why: str):
@@ -1081,6 +1091,14 @@ class PipelineOrchestrator:
         with open(ir_path) as f:
             ir_data = json.load(f)
 
+        # Build expected types map from IR dimensions for contract verification
+        expected_dim_types = {}
+        for dim in ir_data.get("dimensions", []):
+            dname = dim.get("local_name", dim.get("name"))
+            dtype = dim.get("data_type")
+            if dname and dtype:
+                expected_dim_types[dname] = dtype
+
         # 1. Check for Pre-Built Cache or Dynamic Source Files for this job's cubes
         agent = HyperAgent(db=db, job=job, artifacts_dir=artifacts_dir)
         cube_objs = db.query(MigrationObject).filter(
@@ -1095,7 +1113,7 @@ class PipelineOrchestrator:
                 logger.info("Found cached Hyper extract for cube '%s' at %s. Using instant cache...", cube.name, cache_path)
                 try:
                     shutil.copy(cache_path, hyper_file)
-                    ok, why = _verify_hyper_contract(hyper_file)
+                    ok, why = _verify_hyper_contract(hyper_file, expected_dim_types)
                     if not ok:
                         logger.warning(
                             "Cached extract for cube '%s' violates [Extract].[Extract] "
@@ -1120,7 +1138,7 @@ class PipelineOrchestrator:
                     logger.info("Found direct source file at %s. Ingesting via DuckDB + PyArrow...", sc)
                     try:
                         agent.build_from_source_file(sc, Path(hyper_file))
-                        ok, why = _verify_hyper_contract(hyper_file)
+                        ok, why = _verify_hyper_contract(hyper_file, expected_dim_types)
                         if not ok:
                             logger.warning(
                                 "Source-ingested extract violates [Extract].[Extract] "
@@ -1197,6 +1215,7 @@ class PipelineOrchestrator:
 
         try:
             from tableauhyperapi import HyperProcess, Telemetry, Connection, CreateMode, TableDefinition, TableName, SqlType, Inserter
+            from app.utils.sql_types import sql_type_for, coerce_dim_value
 
             with HyperProcess(telemetry=Telemetry.DO_NOT_SEND_USAGE_DATA_TO_TABLEAU) as hyper:
                 with Connection(
@@ -1205,17 +1224,9 @@ class PipelineOrchestrator:
                     create_mode=CreateMode.CREATE_AND_REPLACE,
                 ) as connection:
                     # Build table definition from IR dimensions + measures with guaranteed unique column names.
-                    # Dimension columns are typed by their MSTR form data_type —
-                    # hard-coding text() here made numeric attributes like
-                    # Fraud Score land as TEXT while the TDS declared them
-                    # real, producing red-'!' broken pills in Tableau.
+                    # Dimension columns are typed by their MSTR form data_type via sql_type_for.
                     def _dim_sql_type(dtype: str):
-                        d = str(dtype or "").lower()
-                        if d in ("integer", "bigint", "int"):
-                            return SqlType.int()
-                        if d in ("double", "real", "float", "numeric", "decimal"):
-                            return SqlType.double()
-                        return SqlType.text()
+                        return sql_type_for(dtype)
 
                     columns = []
                     seen_col_names = set()
@@ -1315,29 +1326,19 @@ class PipelineOrchestrator:
                                                 return norm_dict[norm_k]
                                     return None
 
+                                _bad_dates: dict[str, int] = {}
                                 for r in live_extracted_rows:
                                     clean_row = []
 
                                     # 1. Populate dimension columns by name lookup,
-                                    #    coerced to the column's MSTR-declared type —
-                                    #    a numeric attribute must land as numbers,
-                                    #    never str()-flattened into text.
+                                    #    coerced to the column's MSTR-declared type
                                     for d, dt in zip(dims, dim_types):
                                         val = _get_field_val(r, d.get("name"), d.get("local_name"), d.get("caption"), d.get("remote_name"))
-                                        if val is None or str(val).strip().lower() in ("", "none", "null", "nan"):
-                                            clean_row.append(None)
-                                        elif dt in ("integer", "bigint", "int"):
-                                            try:
-                                                clean_row.append(int(float(str(val).strip())))
-                                            except Exception:
-                                                clean_row.append(None)
-                                        elif dt in ("double", "real", "float", "numeric", "decimal"):
-                                            try:
-                                                clean_row.append(float(str(val).replace("$", "").replace(",", "").strip()))
-                                            except Exception:
-                                                clean_row.append(None)
-                                        else:
-                                            clean_row.append(str(val))
+                                        coerced = coerce_dim_value(dt, val)
+                                        if val is not None and str(val).strip().lower() not in ("", "none", "null", "nan") and coerced is None and str(dt).lower() in ("date", "datetime", "timestamp"):
+                                            dim_name = d.get("name") or d.get("local_name") or "date_dim"
+                                            _bad_dates[dim_name] = _bad_dates.get(dim_name, 0) + 1
+                                        clean_row.append(coerced)
 
                                     # 2. Populate measure columns by name lookup with numeric coercion
                                     for m in measures:
@@ -1354,6 +1355,19 @@ class PipelineOrchestrator:
                                     inserter.add_row(clean_row)
                                 inserter.execute()
                                 logger.info("Successfully populated Hyper extract with %d LIVE MSTR rows", len(live_extracted_rows))
+
+                                if _bad_dates:
+                                    bad_summary = ", ".join(f"{k}: {v} unparseable values" for k, v in _bad_dates.items())
+                                    logger.warning("Unparseable date values coerced to NULL: %s", bad_summary)
+                                    from app.models.objects import Issue as IssueModel
+                                    db.add(IssueModel(
+                                        job_id=job.id,
+                                        object_id=job.id,
+                                        severity="warning",
+                                        category="data",
+                                        message=f"Date dimension coercion encountered unparseable values (coerced to NULL): {bad_summary}",
+                                    ))
+                                    db.commit()
                             else:
                                 # HONESTY GUARD: Never fabricate "representative" rows offline.
                                 # A Hyper extract built on invented values would produce a
@@ -1384,7 +1398,7 @@ class PipelineOrchestrator:
             row_count = len(live_extracted_rows)  # 0 when offline — we never fabricate rows
             logger.info("Hyper extract built: %s (%d columns, %d rows)", hyper_file, len(columns), row_count)
 
-            ok, why = _verify_hyper_contract(hyper_file)
+            ok, why = _verify_hyper_contract(hyper_file, expected_dim_types)
             if not ok:
                 _reject_bad_hyper(hyper_file, why)
 
@@ -1394,7 +1408,7 @@ class PipelineOrchestrator:
             logger.warning("Hyper build failed (non-fatal): %s", e)
             hyper_paths["default"] = os.path.join(hyper_dir, "extract.hyper")
             # A failed build must never silently ship a stale or absent file.
-            ok, why = _verify_hyper_contract(hyper_paths["default"])
+            ok, why = _verify_hyper_contract(hyper_paths["default"], expected_dim_types)
             if not ok and "verification unavailable" not in why:
                 _reject_bad_hyper(hyper_paths["default"], f"build failed: {e}; {why}")
 
