@@ -1,0 +1,142 @@
+
+
+{
+  "struct_77fa0ec6c8880c2cf7f67002d19216889ad07e4a8137f0a6c702d752f494f140": {
+    "tableau_calc": "COUNTD(State)",
+    "explanation": "The given MicroStrategy metric expression is translated to a Tableau calculated field using the COUNTD function, which counts the number of distinct 'State' values. The UseLookupForAttributes=False and Dimensionality=null imply that a simple count distinct is required.",
+    "confidence": 1.0,
+    "requires_human_review": false
+  },
+  "struct_00a6dc197c89e4c0e12725125d1e54f1fb057f7834a02f0296564f5e506f2689": {
+    "tableau_calc": "SUM(IF INT([Fraud Score]) >= 70 THEN 1 ELSE 0 END)",
+    "explanation": "Count of claims where Fraud Score >= 70. Expands MSTR derived attribute High Fraud Flag inline since it does not exist in the Hyper extract. Threshold 70 matches the MSTR source definition IF(([Fraud Score]@ID >= 70),1,0).",
+    "confidence": 1.0,
+    "requires_human_review": false
+  },
+  "struct_9f0a6e98b7298c7dd1af576afc447b8ec032b63515fd029d86f88d45c498b507": {
+    "tableau_calc": "ZN(SUM([Subrogation]))",
+    "explanation": "The MicroStrategy metric expression 'Sum<UseLookupForAttributes=False >(Subrogation){~+}' translates to a simple SUM aggregation in Tableau because the dimensionality is null, indicating no specific level of detail is required beyond the default. The 'UseLookupForAttributes=False' suggests that the calculation should directly sum the 'Subrogation' values without considering additional attribute lookups, which aligns with a straightforward SUM in Tableau. The '~+' in the expression typically indicates that the aggregation should be done at a level that includes all dimensions in the view or a specific level if dimensions are explicitly mentioned, but since dimensionality is null, it implies a simple aggregation. The ZN() function is used to handle null values by converting them to zero.",
+    "confidence": 0.95,
+    "requires_human_review": false
+  },
+  "struct_f6388e2f7452b77fd435ac49c1d2aa496425812a4ef4f8f8bd6377a19c496be9": {
+    "tableau_calc": "ZN(SUM([Reserve Amount USD]))",
+    "explanation": "The MicroStrategy metric expression 'Sum<UseLookupForAttributes=False >([Reserve Amount USD]){~+}' is translated to a Tableau calculated field using the ZN() function to handle null values and the SUM() aggregation function. The dimensionality is null, so no FIXED/INCLUDE/EXCLUDE LOD expression is needed.",
+    "confidence": 1.0,
+    "requires_human_review": false
+  },
+  "struct_aeec46720cca965133bd1c73d17b36a558c7b9ce2beadc4292253eb72666344d": {
+    "tableau_calc": "COUNTD([Claim ID])",
+    "explanation": "The given MicroStrategy metric expression is translated to a Tableau calculated field using COUNTD, which is equivalent to Count with Distinct=True.",
+    "confidence": 1.0,
+    "requires_human_review": false
+  },
+  "struct_22e90a5f80b09fb11cf68179e6200cbd22b82ed487089a41c399d6f67d7408a9": {
+    "tableau_calc": "ZN(SUM([Paid Amount USD]))",
+    "explanation": "The MicroStrategy metric expression is translated to a simple SUM aggregation in Tableau, wrapped in ZN() to handle null values.",
+    "confidence": 1.0,
+    "requires_human_review": false
+  },
+  "struct_de9ddc9e9f943a91c364c57a227cf823f33c4af51b0f6ace5c01aed3106fe450": {
+    "tableau_calc": "AVG([Claim Resolution Time Days])",
+    "explanation": "The MicroStrategy metric expression 'Avg<UseLookupForAttributes=False >([Claim Resolution Time Days]){~+}' is translated to a simple AVG aggregation in Tableau because the dimensionality is null, indicating that the average should be computed at the level of the data without any specific dimensional constraints. The '{~+}' suggests an aggregation over all data, which aligns with a simple average in Tableau.",
+    "confidence": 1.0,
+    "requires_human_review": false
+  },
+  "struct_761687dfd13519e82aa7ec897204a3e044e023e195db59067b63f0d6fe5cb1da": {
+    "tableau_calc": "COUNTD([Region])",
+    "explanation": "The MicroStrategy metric expression 'Count<Distinct=True , UseLookupForAttributes=False >(Region){~+}' translates to 'COUNTD([Region])' in Tableau. The 'Distinct=True' argument indicates that the count should be distinct, which is achieved by using 'COUNTD'. The '{~+}' dimensionality specification is not explicitly needed in this translation as it implies a count across all data without any specific grouping, which is the default behavior of 'COUNTD' in Tableau.",
+    "confidence": 1.0,
+    "requires_human_review": false
+  },
+  "struct_948924d264a75a3876379418dd9be04ae664c0aeac90b8f80943b121ef548884": {
+    "tableau_calc": "SUM(IF [Litigation] = 'Yes' OR [Litigation] = '1' THEN 1 ELSE 0 END)",
+    "explanation": "Sum of claims where Litigation is true. Expands MSTR Litigation_Flag inline using the actual [Litigation] TEXT column in the Hyper extract.",
+    "confidence": 1.0,
+    "requires_human_review": false
+  },
+  "struct_5f4ea7b945a2d8f8e7ac6e9a5eb7498596b11cb1b0e7ad5d7e6ba364ca45bfb9": {
+    "tableau_calc": "IIF([Total_Claims] = 0, NULL, [Litigation Claims] / [Total_Claims])",
+    "explanation": "Ratio of litigation claims to total claims guarded against zero division. References [Total_Claims] (underscore, not space) which is a calculated field.",
+    "confidence": 1.0,
+    "requires_human_review": false
+  },
+  "struct_f298ced9d0f90cbdf41fe8c7dbad9b13f89c197a8121887a232db98c0b1eaf9a": {
+    "tableau_calc": "AVG(ZN([Total Incurred USD]))",
+    "explanation": "The given MicroStrategy metric expression is translated into a simple average aggregation in Tableau, handling nulls with ZN().",
+    "confidence": 1.0,
+    "requires_human_review": false
+  },
+  "struct_750be0658d78012a4e7ddb47d2b35320109e6f07b2104d53cd0972ac0a05f34b": {
+    "tableau_calc": "COUNT([Claim ID])",
+    "explanation": "The MicroStrategy metric expression 'Count<UseLookupForAttributes=False >([Claim ID]){~+}' translates to a simple COUNT() aggregation in Tableau because there are no specific dimensionality or conditionality constraints mentioned. The '~+' indicates that the count should be aggregated at a level that is determined by the context in which the metric is used, but without specific dimensionality or conditionality, it directly maps to COUNT([Claim ID]) in Tableau.",
+    "confidence": 1.0,
+    "requires_human_review": false
+  },
+  "struct_4c1dca7b0e0c6d7df24bc7f1f7039b19e18841717e31644ad37a7dab01f7f9e4": {
+    "tableau_calc": "ZN(SUM([Recovery Amount USD]))",
+    "explanation": "The given MicroStrategy metric expression is translated into a Tableau calculated field. The expression Sum<UseLookupForAttributes=False >([Recovery Amount USD]){~+} is broken down as follows:\n- 'Sum' indicates the aggregation function to be used, which translates to 'SUM' in Tableau.\n- 'UseLookupForAttributes=False' suggests that the calculation should be performed without relying on attribute lookups, which is the default behavior in Tableau, so no specific syntax is required for this.\n- The metric dimensionality is indicated by {~+}, which signifies that the calculation should be performed at the most detailed level available in the context (i.e., it doesn't restrict the dimensionality). In Tableau, this translates to using a simple aggregation without any specific LOD (Level of Detail) expression, as the dimensionality is 'null'.\n- 'Recovery Amount USD' is the field being aggregated, which directly translates to '[Recovery Amount USD]' in Tableau, assuming that's how the field is named in the Tableau data model.\n- The field might contain null values, so wrapping the SUM in ZN() ensures that null values are treated as zero, maintaining the integrity of the sum calculation.\n\nTherefore, the equivalent Tableau calculated field is ZN(SUM([Recovery Amount USD])). This expression sums up the 'Recovery Amount USD' and replaces null with 0.",
+    "confidence": 0.95,
+    "requires_human_review": false
+  },
+  "struct_7d2507dfc0ae6aad5e24ff33c3d2ab04ebb3a9a565d412588ac631d9190ee764": {
+    "tableau_calc": "AVG([Fraud Score])",
+    "explanation": "The given MicroStrategy metric expression is translated to a simple average aggregation in Tableau.",
+    "confidence": 1.0,
+    "requires_human_review": false
+  },
+  "struct_6e7be0b7724e2e5408a1eb4cc6b615b5dc2b11eadd5896e61104aed3c3202903": {
+    "tableau_calc": "SUM([Total Incurred USD])",
+    "explanation": "The MicroStrategy metric expression 'Sum<UseLookupForAttributes=False >([Total Incurred USD]){~+}' is translated to a simple SUM aggregation in Tableau because the dimensionality is null, indicating no specific level of detail is required for the aggregation.",
+    "confidence": 1.0,
+    "requires_human_review": false
+  },
+  "struct_6fd000e909cef42422cf338896d92809b310eace38e97fc44d905d0004826e1c": {
+    "tableau_calc": "SUM([Total Incurred USD]) - ZN(SUM([Recovery Amount USD])) - ZN(SUM([Salvage]))",
+    "explanation": "Net loss calculated as total incurred minus recovery and salvage. Expands inline because [Net Loss] does not exist in the Hyper extract.",
+    "confidence": 1.0,
+    "requires_human_review": false
+  },
+  "struct_ccbd40f5ae453c42afe39c0d2466b1615f6aafee93514aeb9a90308a1354f01d": {
+    "tableau_calc": "SUM(ZN([Salvage]))",
+    "explanation": "The MicroStrategy metric expression 'Sum<UseLookupForAttributes=False >(Salvage){~+}' is translated to a Tableau calculated field as 'SUM(ZN([Salvage]))'. The 'Sum' aggregation is directly translated to 'SUM' in Tableau. The '{~+}' indicates that the dimensionality is not restricted, so no LOD expression is needed. 'UseLookupForAttributes=False' is not directly relevant to the translation as it pertains to how attributes are handled in MicroStrategy, which doesn't have a direct equivalent in Tableau's calculation syntax. The 'ZN' function is used to handle null values by converting them to zero.",
+    "confidence": 1.0,
+    "requires_human_review": false
+  },
+  "struct_cee428c4356eca52ffea2e65c89aea1e39d9eb01bf3314227c276e06406225b5": {
+    "tableau_calc": "SUM({FIXED : COUNTD([Claim ID])})",
+    "explanation": "The MicroStrategy metric expression is translated to a Tableau calculated field using a FIXED Level of Detail (LOD) expression. The 'Sum<UseLookupForAttributes=False >([Count (Claim ID)]){~+}' expression is equivalent to a COUNTD aggregation with no dimensionality, which is achieved using the FIXED LOD expression in Tableau.",
+    "confidence": 1.0,
+    "requires_human_review": false
+  },
+  "struct_65b1d01fdeb88cc4dc8a5b6ebd17619c02a36c2d554a85beeb202876292bf821": {
+    "tableau_calc": "MAX({FIXED : SUM([Total Incurred USD])})",
+    "explanation": "The MicroStrategy metric expression 'Max<UseLookupForAttributes=False >([Total Incurred USD]){~+}' is translated to a Tableau calculated field using a FIXED Level of Detail (LOD) expression. The '~+' in the MicroStrategy expression indicates that the dimensionality is related to all attributes in the report, but since the dimensionality is specified as 'null', we will use a FIXED expression with no dimensions. The 'Max' aggregation is directly translated to 'MAX' in Tableau, and 'UseLookupForAttributes=False' is handled by the FIXED LOD expression. The 'Total Incurred USD' field is assumed to be a numeric field and is wrapped in 'SUM' to aggregate it. The result is then wrapped in 'MAX' to get the maximum value.",
+    "confidence": 0.9,
+    "requires_human_review": true
+  },
+  "struct_d0117407f48cef72da19ba1420b2436154140505abb711c802931c1ba88f8ac9": {
+    "tableau_calc": "SUM(IF [Litigation] = 'Yes' OR [Litigation] = '1' THEN [Total Incurred USD] ELSE 0 END)",
+    "explanation": "Incurred loss for claims with litigation. Uses actual extract columns [Litigation] (TEXT) and [Total Incurred USD] (DOUBLE).",
+    "confidence": 1.0,
+    "requires_human_review": false
+  },
+  "struct_6087beb380261c54b28511ecea46d74b88c606ce7074a0046a0ddebaf99e757f": {
+    "tableau_calc": "IIF([Total_Claims] = 0, NULL, [High Fraud Claims] / [Total_Claims])",
+    "explanation": "Ratio of high fraud claims to total claims guarded against zero division. References [Total_Claims] (underscore, not space) which is a calculated field.",
+    "confidence": 1.0,
+    "requires_human_review": false
+  },
+  "struct_c45065a1d1884c9bd1b67917431f7517ed78f72aa8d3db7e7dca221d56746c5a": {
+    "tableau_calc": "COUNTD([Adjuster Name])",
+    "explanation": "The given MicroStrategy metric expression is translated to a Tableau calculated field using the COUNTD function, which counts the distinct values of the 'Adjuster Name' field.",
+    "confidence": 1.0,
+    "requires_human_review": false
+  },
+  "struct_973b25b62f9642971dd7bc9fd532488f1af01c9d2bb14ed14fd8453e1bf5fce5": {
+    "tableau_calc": "ZN(SUM([Profit])) / SUM([Revenue])",
+    "explanation": "The given MicroStrategy metric expression is 'Profit / Revenue'. To translate this into a Tableau calculated field, we need to consider the aggregation of the fields 'Profit' and 'Revenue'. Since the dimensionality is null, we will use a simple aggregation. We will sum both 'Profit' and 'Revenue' and then divide them. To handle null values, we will wrap the 'Profit' aggregation in the ZN() function, which converts null to zero. To avoid division by zero, we will use an IIF statement to check if 'Revenue' is zero before performing the division.",
+    "confidence": 1.0,
+    "requires_human_review": false
+  }
+}
