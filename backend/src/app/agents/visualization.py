@@ -270,12 +270,12 @@ class VisualizationAgent:
             result.worksheets.append(ws)
 
         # Human-supplied bindings (review-approved artifact): rescue visuals
-        # that carry NO MicroStrategy evidence instead of leaving them omitted.
-        # Applied only where no evidence-based binding exists; every field is
-        # exact-validated, and an unresolvable override keeps the sheet failed.
+        # that carry NO MicroStrategy evidence or have known MSTR binding slips.
+        # Applied when a visual is failed OR has an explicit override entry;
+        # every field is exact-validated, and an unresolvable override keeps the sheet failed.
         if self._binding_overrides:
             for ws in result.worksheets:
-                if ws.is_failed:
+                if ws.is_failed or ws.name.strip().lower() in self._binding_overrides:
                     self._apply_human_override(ws)
 
         # If no visuals, create default worksheets from measures

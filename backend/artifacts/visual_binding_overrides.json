@@ -75,5 +75,11 @@
     "mark": "bar",
     "columns": ["Severity Band"],
     "rows": ["Total Incurred USD", "Avg Severity"]
+  },
+  "Litigation Incurred Loss": {
+    "_note": "MSTR W345 payload suffered from an API binding slip binding Sum (Salvage). Re-bound to the true matching measure Litigation Incurred Loss as a line chart matching MSTR.",
+    "mark": "line",
+    "rows": ["State"],
+    "columns": ["Litigation Incurred Loss"]
   }
 }

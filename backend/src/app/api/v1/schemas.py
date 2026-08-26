@@ -158,6 +158,9 @@ class ObjectResponse(BaseModel):
     confidence: float = 0.0
     translation_method: Optional[str] = None
     expression_text: Optional[str] = None
+    # Ordered expansion chain when the source formula referenced dataset-derived
+    # objects resolved from harvested ground truth (Logic Explorer lineage).
+    definition_chain: Optional[list[dict[str, Any]]] = None
     tableau_calc: Optional[str] = None
     tableau_field_name: Optional[str] = None
     dependency_ids: Optional[list[str]] = None

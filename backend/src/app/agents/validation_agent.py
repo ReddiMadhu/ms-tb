@@ -15,6 +15,7 @@ Gates:
 
 import json
 import logging
+import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -98,9 +99,17 @@ class ValidationAgent:
         structural_checks = await self._validate_structural(ir)
         scorecard.checks.extend(structural_checks)
 
+        # Gate 1b: Dead-condition detection (Defect #4, RCA-VERIFIED.md)
+        dead_cond_checks = self._detect_dead_conditions(ir)
+        scorecard.checks.extend(dead_cond_checks)
+
         # Gate 2: Financial KPI validation
         kpi_checks = await self._validate_kpi(ir, hyper_paths)
         scorecard.checks.extend(kpi_checks)
+
+        # Gate 2b: Derived-attribute domain-risk detection (Defect #1, RCA-VERIFIED.md)
+        domain_risk_checks = self._detect_derived_attr_domain_risk(ir)
+        scorecard.checks.extend(domain_risk_checks)
 
         # Gate 3: Security validation
         security_checks = await self._validate_security(ir, mstr_session)
@@ -329,6 +338,149 @@ class ValidationAgent:
                 ),
             )
             checks.append(check)
+
+        return checks
+
+    # ── Dead-condition detection (Defect #4, RCA-VERIFIED.md) ────
+
+    # Pattern: IF [FieldName] = 'literal' or IF [FieldName] = "literal"
+    _CONDITION_RE = re.compile(
+        r"\[([^\]]+)\]\s*=\s*['\"]([^'\"]+)['\"]"
+    )
+
+    def _detect_dead_conditions(self, ir) -> list[ValidationCheck]:
+        """
+        Scan calc expressions for IF [field] = 'literal' patterns where the
+        literal is known to be absent from the field's data.
+
+        Defect #4 (RCA-VERIFIED.md): Litigation Incurred Loss tests
+        Litigation@ID = "1" but the data contains only 'Yes'/'No'.
+        The metric always evaluates to 0.
+
+        Uses the harvested object_definitions to build a known-values set
+        from dimension/attribute elements. Falls back to checking if the
+        tested value looks like an ID-form mismatch (numeric vs string).
+        """
+        checks = []
+        # Build dimension name → known values from IR dimension elements
+        dim_values: dict[str, set] = {}
+        for dim in ir.dimensions:
+            elems = getattr(dim, 'elements', None) or getattr(dim, 'known_values', None)
+            if elems:
+                dim_values[dim.name.lower()] = {str(v) for v in elems}
+                dim_values[dim.caption.lower()] = {str(v) for v in elems}
+
+        for measure in ir.measures:
+            calc = getattr(measure, "tableau_calc", "") or ""
+            for match in self._CONDITION_RE.finditer(calc):
+                field_name, test_value = match.group(1), match.group(2)
+                field_lower = field_name.lower()
+
+                # Check against known dimension values
+                known = dim_values.get(field_lower)
+                if known is not None and test_value not in known:
+                    check = ValidationCheck(
+                        check_type="dead_condition",
+                        object_id=getattr(measure, 'mstr_id', measure.name),
+                        expected=f"'{test_value}' in {field_name} values",
+                        actual=f"absent (known: {sorted(list(known))[:5]})",
+                        passed=False,
+                        category="structural",
+                        message=(
+                            f"Metric '{measure.name}' tests [{field_name}] = '{test_value}' "
+                            f"but this value is absent from the field's known values "
+                            f"({sorted(list(known))[:5]}). "
+                            f"Metric will always evaluate to 0/false."
+                        ),
+                    )
+                    checks.append(check)
+                    logger.warning(
+                        "Dead condition detected: %s tests [%s]='%s' (absent from data)",
+                        measure.name, field_name, test_value,
+                    )
+                elif known is None:
+                    # No element data — check for ID-form mismatch heuristic:
+                    # if the field name exists in object_definitions as a derived
+                    # attr with a different condition value, flag it.
+                    obj_defs = getattr(ir, 'object_definitions', None) or {}
+                    by_name = obj_defs.get('by_name_lower', {})
+                    # Look for related _Flag definitions that test a different value
+                    flag_name = f"{field_name}_flag".lower().replace(' ', '_')
+                    flag_def = by_name.get(flag_name) or by_name.get(field_lower)
+                    if flag_def and isinstance(flag_def.get('formula', ''), str):
+                        flag_formula = flag_def['formula']
+                        # Does the flag test a DIFFERENT value?
+                        flag_matches = self._CONDITION_RE.findall(flag_formula)
+                        for _, flag_val in flag_matches:
+                            if flag_val != test_value:
+                                check = ValidationCheck(
+                                    check_type="dead_condition_suspect",
+                                    object_id=getattr(measure, 'mstr_id', measure.name),
+                                    expected=f"consistent condition value",
+                                    actual=(
+                                        f"metric tests '{test_value}' but "
+                                        f"related flag '{flag_def['name']}' tests '{flag_val}'"
+                                    ),
+                                    passed=False,
+                                    category="structural",
+                                    message=(
+                                        f"Metric '{measure.name}' tests [{field_name}] = '{test_value}' "
+                                        f"but the related definition '{flag_def['name']}' tests "
+                                        f"'{flag_val}' — possible ID-form vs DESC-form mismatch. "
+                                        f"Verify which value exists in the extract data."
+                                    ),
+                                )
+                                checks.append(check)
+
+        return checks
+
+    # ── Derived-attribute domain-risk detection (Defect #1, RCA-VERIFIED.md) ──
+
+    def _detect_derived_attr_domain_risk(self, ir) -> list[ValidationCheck]:
+        """
+        Flag metrics whose definition chain includes derived attributes (st=3077).
+
+        Defect #1 (RCA-VERIFIED.md): MSTR evaluates derived-attribute flags
+        at the distinct-value DOMAIN level, not row level:
+          - High Fraud Flag (IF Fraud_Score >= 70, 1, 0): MSTR counts 30
+            (distinct values ≥ 70), Tableau counts 27,979 (rows ≥ 70).
+          - Litigation_Flag (IF Litigation = 'Yes', 1, 0): MSTR counts 1
+            (one distinct value), Tableau counts 30,638 (rows).
+
+        The Tableau answer is the correct business answer. This check
+        ensures such metrics are flagged for manual review.
+        """
+        checks = []
+
+        for measure in ir.measures:
+            chain = getattr(measure, "definition_chain", None) or []
+            derived_attr_names = [
+                c.get("name", "unknown")
+                for c in chain
+                if c.get("st") == 3077 or c.get("derived_attr") is True
+            ]
+            if derived_attr_names:
+                check = ValidationCheck(
+                    check_type="derived_attr_domain_risk",
+                    object_id=getattr(measure, 'mstr_id', measure.name),
+                    expected="row_level_evaluation",
+                    actual=f"depends_on_derived_attrs: {', '.join(derived_attr_names)}",
+                    passed=False,
+                    category="financial_kpi",
+                    message=(
+                        f"Metric '{measure.name}' depends on derived attribute(s) "
+                        f"({', '.join(derived_attr_names)}) — MSTR evaluates these at "
+                        f"distinct-value domain level, producing different values than "
+                        f"Tableau's row-level evaluation. Tableau's answer is likely the "
+                        f"correct business answer. MSTR KPI comparison will show a "
+                        f"large discrepancy that is NOT a migration bug."
+                    ),
+                )
+                checks.append(check)
+                logger.info(
+                    "Derived-attr domain risk: %s depends on %s",
+                    measure.name, derived_attr_names,
+                )
 
         return checks
 

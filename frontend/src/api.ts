@@ -104,6 +104,7 @@ export interface MigrationObject {
   confidence?: number;
   translation_method?: string;
   expression_text?: string;
+  definition_chain?: { name: string; formula: string }[];
   tableau_calc?: string;
   tableau_field_name?: string;
   blocker_count?: number;

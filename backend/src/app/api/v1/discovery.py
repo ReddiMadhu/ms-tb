@@ -271,11 +271,25 @@ async def list_objects(
     for o in objects:
         res = ObjectResponse.model_validate(o)
         ir_m = ir_calc_map.get(res.name) or ir_calc_map.get(res.mstr_id)
-        if ir_m and ir_m.get("tableau_calc"):
+        if ir_m and ir_m.get("definition_chain"):
+            # Harvested-definition expansion owns this measure. Its DB row was
+            # written BEFORE the expansion pass (the AI stage deliberately
+            # skips precomputed/pinned measures), so ir.json — dumped after
+            # expansion — is the authoritative source here. Without this,
+            # the page shows stale pre-expansion refs like SUM([Net Loss]).
+            res.definition_chain = ir_m.get("definition_chain")
+            if ir_m.get("tableau_calc"):
+                res.tableau_calc = ir_m.get("tableau_calc")
+            if ir_m.get("expression_text"):
+                res.expression_text = ir_m.get("expression_text")
+            res.translation_method = "Harvested Definition Expansion"
+        elif ir_m and ir_m.get("tableau_calc"):
             if not res.tableau_calc or res.tableau_calc == f"SUM([{res.name}])":
                 res.tableau_calc = ir_m.get("tableau_calc")
             if not res.expression_text and ir_m.get("expression_text"):
                 res.expression_text = ir_m.get("expression_text")
+            if not res.definition_chain and ir_m.get("definition_chain"):
+                res.definition_chain = ir_m.get("definition_chain")
             if not res.translation_method:
                 res.translation_method = "AST Expression Engine"
         resp_objects.append(res)
@@ -301,4 +315,31 @@ async def get_object(job_id: str, object_id: str, db: Session = Depends(get_db))
     )
     if not obj:
         raise HTTPException(status_code=404, detail="Object not found")
-    return ObjectResponse.model_validate(obj)
+    res = ObjectResponse.model_validate(obj)
+
+    # Same ground-truth override as list_objects: expanded measures must show
+    # the ir.json result, not their stale pre-expansion DB row.
+    job = db.query(Job).filter(Job.id == job_id).first()
+    if job and job.artifacts_dir:
+        from pathlib import Path
+        import json as _json
+        ir_file = Path(job.artifacts_dir) / "ir.json"
+        if ir_file.exists():
+            try:
+                with open(ir_file, "r", encoding="utf-8") as f:
+                    ir_raw = _json.load(f)
+                ir_m = next(
+                    (m for m in ir_raw.get("measures", [])
+                     if m.get("name") == res.name or m.get("mstr_id") == res.mstr_id),
+                    None,
+                )
+                if ir_m and ir_m.get("definition_chain"):
+                    res.definition_chain = ir_m.get("definition_chain")
+                    if ir_m.get("tableau_calc"):
+                        res.tableau_calc = ir_m.get("tableau_calc")
+                    if ir_m.get("expression_text"):
+                        res.expression_text = ir_m.get("expression_text")
+                    res.translation_method = "Harvested Definition Expansion"
+            except Exception:
+                pass
+    return res

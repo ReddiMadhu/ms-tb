@@ -41,6 +41,10 @@ def _normalize_llm_calc(calc: str) -> str:
 
 def _honest_method(measure) -> str:
     """Method string that never claims MSTR evidence we don't have."""
+    if getattr(measure, "definition_chain", None):
+        # Compiled from harvested dataset-object definitions (instance payload
+        # att[]/mx[] `f` formulas) — stronger provenance than a plain AST.
+        return "Harvested Definition Expansion"
     if getattr(measure, "provenance", "mstr") != "mstr":
         return "Derived from cube base column - MSTR stores no formula"
     return "AST Expression Engine"
@@ -172,6 +176,11 @@ class AITranslationAgent:
 
         Modifies measures in-place with translated Tableau calcs and updates database MigrationObjects.
         """
+        # Ground-truth dataset-object definitions harvested by the orchestrator
+        # (instance payload att[] derived attrs + mx[] metrics). Used to inject
+        # VERIFIED context into LLM prompts instead of letting the model guess
+        # business rules (the Tier-1 cache once invented Net Loss semantics).
+        self._ground_defs = getattr(ir, "object_definitions", None) or {}
         if translate_all:
             candidates = [
                 m for m in ir.measures
@@ -199,8 +208,7 @@ class AITranslationAgent:
             ]
 
         if not candidates:
-            logger.info("No candidate measures requiring AI translation")
-            # Still ensure all DB MigrationObjects have their compiled tableau_calc
+            logger.info("No candidate measures requiring AI translation")            # Still ensure all DB MigrationObjects have their compiled tableau_calc
             for measure in ir.measures:
                 obj = (
                     self.db.query(MigrationObject)
@@ -240,6 +248,11 @@ class AITranslationAgent:
                 )
                 if obj:
                     obj.tableau_calc = result.tableau_calc
+                    # Persist the harvested MSTR source formula next to the calc.
+                    # Mirrors the fallback branches below; without this, every
+                    # cache/LLM-translated measure reaches Logic Explorer with a
+                    # target calc but "no formula stored" on the source side.
+                    obj.expression_text = measure.expression_text or obj.expression_text
                     obj.confidence = measure.confidence
                     obj.translation_method = "LLM Engine (Centralized)"
 
@@ -399,12 +412,44 @@ class AITranslationAgent:
             )
 
         try:
+            # ── Ground-truth context: harvested dataset definitions ──────
+            # Only definitions whose object name appears in THIS expression
+            # (plus one hop into their bodies) are injected — the LLM must use
+            # them verbatim, and anything it still cannot see is a review flag.
+            ground_lines = []
+            try:
+                by_name = (getattr(self, "_ground_defs", None) or {}).get("by_name_lower") or {}
+                expr_l = (measure.expression_text or "").lower()
+                for lname, d in by_name.items():
+                    dname = (d.get("name") or lname)
+                    if dname.lower() in expr_l:
+                        ground_lines.append(f"  {dname} ≔ {d.get('formula', '')}")
+                        # one hop: bodies may reference other derived objects
+                        body_l = (d.get("formula") or "").lower()
+                        for l2, d2 in by_name.items():
+                            n2 = (d2.get("name") or l2)
+                            if l2 != lname and n2.lower() in body_l:
+                                ground_lines.append(f"  {n2} ≔ {d2.get('formula', '')}")
+                ground_lines = list(dict.fromkeys(ground_lines))   # dedupe, keep order
+            except Exception as ge:
+                logger.debug("ground-def context build failed: %s", ge)
+
+            ground_block = ""
+            if ground_lines:
+                ground_block = (
+                    "\n\nHarvested MicroStrategy object definitions (GROUND TRUTH from the "
+                    "live environment — use verbatim; never contradict or reinvent):\n"
+                    + "\n".join(ground_lines)
+                    + "\nIf the expression references an object NOT defined above, set "
+                    "requires_human_review=true and name the unverified reference in the explanation."
+                )
+
             prompt = f"""Translate this MicroStrategy metric expression to a Tableau calculated field.
 
 MicroStrategy Metric: {measure.name}
 Expression: {measure.expression_text or 'Not available'}
 Dimensionality: {json.dumps(getattr(measure, 'dimty', None))}
-Conditionality: {json.dumps(getattr(measure, 'conditionality', None))}
+Conditionality: {json.dumps(getattr(measure, 'conditionality', None))}{ground_block}
 
 Rules:
 - Use Tableau Desktop syntax (SUM, AVG, COUNT, COUNTD, MIN, MAX, etc.)

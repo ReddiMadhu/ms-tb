@@ -38,7 +38,9 @@ logger = logging.getLogger(__name__)
 # MSTR expression-tree function codes (ft / aggFunc) observed in real
 # dossier-instance responses (datasets[].mx[]). Only codes verified against
 # captured API output are mapped; unknown codes fail closed to text compilation.
-MSTR_FT_AGG = {12: "SUM", 13: "COUNT", 14: "AVG"}
+# ft=16 (MAX) verified from instance_full.json → Top State Loss (aggFunc=16).
+# ft=17 (MIN) added defensively — standard MSTR code, no instance example yet.
+MSTR_FT_AGG = {12: "SUM", 13: "COUNT", 14: "AVG", 16: "MAX", 17: "MIN"}
 
 # Aggregate calls recognized when classifying division operands (Rule 1).
 # ZN( counts as aggregate-neutral here: ZN(SUM(x)) is aggregate, but a bare
@@ -137,6 +139,9 @@ class IRMeasure:
     caption: str
     tableau_calc: str
     expression_text: Optional[str] = None
+    # MSTR mexp tree {ft, args} from the instance payload — attached during
+    # ground-truth wiring; declared here so asdict()/reload round-trips keep it.
+    expression_ast: Optional[dict] = None
     precomputed_calc: Optional[str] = None   # set for managed metrics — skip re-compilation
     confidence: float = 1.0
     scope: str = "local"       # "shared" | "local" (ADR-027)
@@ -148,6 +153,11 @@ class IRMeasure:
     # (instance datasets.mx entry carries `f`/`mexp` or um=true). Derived metrics
     # must be Tableau calculated fields, never materialized extract columns.
     is_derived: bool = False
+    # Ordered expansion chain harvested from dataset object definitions:
+    # [{"name": "High Fraud Flag", "formula": "IF(...)", "source": "harvested"}]
+    # Populated when the measure's raw expression referenced dataset-derived
+    # objects that were inlined from ground truth (see expression_resolver).
+    definition_chain: Optional[list] = None
 
 
 @dataclass
@@ -199,6 +209,10 @@ class BIIR:
     filters: list[IRFilter] = field(default_factory=list)
     visuals: list[IRVisual] = field(default_factory=list)
     issues: list[IRIssue] = field(default_factory=list)
+    # Ground-truth dataset-object definitions harvested from the dossier
+    # instance payload (datasets{dsId}.att[] derived attrs + .mx[] metrics):
+    # {"by_did": {did: def}, "by_name_lower": {name: def}}
+    object_definitions: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         import dataclasses
@@ -601,6 +615,13 @@ class IRCompilerAgent:
         if not f_text or not isinstance(f_text, str):
             return None
 
+        # Decoration normalization BEFORE the head-strip: _strip eats ALL
+        # <hint> blocks including Count's `Distinct=True`, which silently
+        # degraded distinct counts to plain COUNT. Resolve semantics first
+        # (Count<Distinct=True…>( → COUNTD(, drop VLDB hints), then strip.
+        from app.agents.expression_resolver import _normalize_agg_decorations
+        f_text = _normalize_agg_decorations(f_text)
+
         core, dimty = _strip_formula_decorations(f_text)
         if not core:
             return None
@@ -650,15 +671,20 @@ class IRCompilerAgent:
 
         core = _translate_if_calls(core)
 
+        # Bracketed form refs coming from inlined definition bodies:
+        # [Attribute]@ID / [Attribute]@DESC → [Attribute]
+        core = re.sub(r"\[([^\[\]]+)\]@(?:ID|DESC)\b", r"[\1]", core)
+
         # Attribute@ID → [Attribute]
         core = re.sub(r"([A-Za-z_][\w ]*?)@ID", lambda mm: f"[{mm.group(1).strip()}]", core)
 
-        # Bracket bare identifiers outside of existing [..] refs, so MSTR's
-        # unbracketed metric/attribute names become valid Tableau fields.
+        # Bracket bare identifiers outside of existing [..] refs AND outside of
+        # quoted string literals, so MSTR's unbracketed metric/attribute names
+        # become valid Tableau fields while "Yes"/'Yes' literals stay intact.
         _KEYWORDS = {"IF", "THEN", "ELSE", "END", "AND", "OR", "NOT", "NULL", "TRUE", "FALSE"}
-        segments = re.split(r"(\[[^\]]*\])", core)
+        segments = re.split(r'(\[[^\]]*\]|"[^"]*"|\'[^\']*\')', core)
         for si, seg in enumerate(segments):
-            if seg.startswith("["):
+            if not seg or seg[0] in "[\"'":
                 continue
             def _bracket(mm):
                 tok = mm.group(0).strip()

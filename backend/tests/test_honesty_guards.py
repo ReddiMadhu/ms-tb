@@ -432,3 +432,69 @@ def test_classifier_excludes_derived_and_keeps_base_columns():
     assert out == [base], (
         "Derived metric materialized into the extract — would freeze AVG semantics"
     )
+
+
+# ──────────────────────────────────────────────────────────────────
+#  [6] Source-formula provenance survives the AI translation path
+# ──────────────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_cache_hit_translation_persists_mstr_source_formula(db_session, tmp_path):
+    """Regression: the translation SUCCESS branch wrote tableau_calc /
+    confidence / translation_method but dropped expression_text, so every
+    Tier-1 (cache-hit) measure reached Logic Explorer with a target calc and
+    'no formula stored' on the source side — even though the harvested MSTR
+    expression was present the whole time (it is part of the hashed prompt).
+    The fallback branches already persisted it; the success branch must too."""
+    from app.agents.ai_translation import LLMTranslationResult
+    from app.models.objects import MigrationObject
+
+    SRC = "Sum<UseLookupForAttributes=False >([High Fraud Flag]){~+}"
+    CALC = "SUM(IF INT([Fraud Score]) >= 70 THEN 1 ELSE 0 END)"
+
+    job = _make_job(db_session)
+    db_session.add(MigrationObject(
+        job_id=job.id, mstr_id="M-HF", mstr_type=4, type_name="metric",
+        name="High Fraud Claims", status="discovered",
+    ))
+    derived = IRMeasure(
+        id="d-hf", mstr_id="M-HF", name="High Fraud Claims",
+        local_name="High_Fraud_Claims", remote_name="High_Fraud_Claims",
+        caption="High Fraud Claims", tableau_calc="",
+        confidence=0.5,           # < 0.85 → candidate even without an LLM configured
+        expression_text=SRC,
+    )
+    # Base cube column: MSTR stores NO formula — provenance must stay empty.
+    db_session.add(MigrationObject(
+        job_id=job.id, mstr_id="M-BASE", mstr_type=4, type_name="metric",
+        name="Paid Amount USD", status="discovered",
+    ))
+    base_col = IRMeasure(
+        id="d-base", mstr_id="M-BASE", name="Paid Amount USD",
+        local_name="Paid_Amount_USD", remote_name="Paid_Amount_USD",
+        caption="Paid Amount USD", tableau_calc="",
+        confidence=0.5, expression_text=None,
+    )
+    db_session.commit()
+
+    agent = AITranslationAgent(db=db_session, job=job, artifacts_dir=str(tmp_path))
+    # Tier-1 seed — exactly what the 23 real measures hit in llm_cache.json.
+    agent.cache.put(SRC, LLMTranslationResult(
+        tableau_calc=CALC, explanation="count of high-fraud claims",
+        confidence=0.95, requires_human_review=False,
+    ))
+
+    await agent.run(_minimal_ir([derived, base_col]))
+
+    db_session.expire_all()
+    obj_d = db_session.query(MigrationObject).filter_by(mstr_id="M-HF").one()
+    obj_b = db_session.query(MigrationObject).filter_by(mstr_id="M-BASE").one()
+
+    assert obj_d.tableau_calc == CALC
+    assert obj_d.expression_text == SRC, (
+        "Cache/LLM success path dropped the MSTR source formula — Logic "
+        "Explorer cannot show the original expression for this measure"
+    )
+    assert obj_d.translation_method == "LLM Engine (Centralized)"
+    # Honesty: no invented formula for base columns that MSTR never defined.
+    assert obj_b.tableau_calc and obj_b.expression_text is None

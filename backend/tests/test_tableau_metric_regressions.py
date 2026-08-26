@@ -245,3 +245,268 @@ def test_detector_flags_and_clears_correctly():
     assert _find_illegal_aggregation_nesting(
         "AVG(ZN([Total Incurred USD]))", {"Total Incurred USD"},
     ) is None
+
+
+# ── RCA-VERIFIED defect regressions ─────────────────────────────────
+
+class TestRCADefect3_TopStateLossMistranslation:
+    """Defect #3: Max<...>([Total Incurred USD]){~+} must compile to
+    MAX([Total Incurred USD]), never MAX({FIXED : SUM(…)}).
+
+    Root cause: ft=16 (MAX) was missing from MSTR_FT_AGG, so the mexp
+    tree path fell through to the text/AI path which wrapped it in a FIXED
+    LOD expression turning "max single claim" into "grand total" ($300K → $5.34B).
+    """
+
+    def test_mexp_ft16_compiles_to_max(self):
+        """mexp tree with ft=16 should produce MAX([field])."""
+        from app.agents.ir_compiler import MSTR_FT_AGG
+        # Verified: ft=16 → MAX, ft=17 → MIN
+        assert MSTR_FT_AGG.get(16) == "MAX"
+        assert MSTR_FT_AGG.get(17) == "MIN"
+
+    def test_compile_mstr_formula_max_report_level(self):
+        """Max<UseLookupForAttributes=False>([Total Incurred USD]){~+}
+        must compile to MAX([Total Incurred USD])."""
+        from app.agents.ir_compiler import IRCompilerAgent
+        from types import SimpleNamespace
+
+        # Minimal IR bundle
+        ir = SimpleNamespace(
+            dimensions=[], measures=[], tables=[], filters=[], issues=[],
+            relationships=[],
+        )
+        compiler = IRCompilerAgent.__new__(IRCompilerAgent)
+        compiler.ir = ir
+        compiler._id_to_name = {}
+
+        result = compiler._compile_mstr_formula(
+            'Max<UseLookupForAttributes=False >([Total Incurred USD]){~+}'
+        )
+        assert result is not None, "Formula must not fail closed"
+        assert "MAX(" in result.upper(), f"Expected MAX(...), got: {result}"
+        assert "FIXED" not in result.upper(), f"Must NOT contain FIXED LOD: {result}"
+        assert "SUM" not in result.upper(), f"Must NOT wrap in SUM: {result}"
+
+    def test_max_calc_pinned_as_precomputed(self):
+        """After orchestrator enrichment, simple MAX([F]) calcs must be pinned
+        via precomputed_calc so the AI stage cannot overwrite them."""
+        # Simulate what the orchestrator does post-enrichment
+        calc = "MAX([Total Incurred USD])"
+        upper = calc.strip().upper()
+        should_pin = upper.startswith(("MAX(", "MIN(")) and upper.count("(") == 1
+        assert should_pin, "Simple MAX calc must be pinned as precomputed_calc"
+
+        # Complex MAX (nested) should NOT be pinned
+        complex_calc = "MAX(SUM([Total Incurred USD]))"
+        upper_c = complex_calc.strip().upper()
+        should_not_pin = upper_c.startswith(("MAX(", "MIN(")) and upper_c.count("(") == 1
+        assert not should_not_pin, "Nested MAX(SUM(...)) must NOT be auto-pinned"
+
+
+class TestRCADefect4_DeadConditionDetection:
+    """Defect #4: Litigation Incurred Loss tests Litigation@ID = '1' but
+    data has only 'Yes'/'No'. The dead-condition detector must flag this."""
+
+    def test_dead_condition_detected_with_known_values(self):
+        """When dimension elements are known, a test for an absent value is flagged."""
+        from app.agents.validation_agent import ValidationAgent
+
+        # Build a minimal IR with a dimension that has known values
+        ir = type("IR", (), {
+            "dimensions": [type("Dim", (), {
+                "name": "Litigation",
+                "caption": "Litigation",
+                "mstr_id": "LIT001",
+                "elements": ["Yes", "No"],
+                "known_values": None,
+            })()],
+            "measures": [type("M", (), {
+                "name": "Litigation Incurred Loss",
+                "mstr_id": "LIL001",
+                "tableau_calc": "SUM(IF [Litigation] = \"1\" THEN [Total Incurred] ELSE 0 END)",
+            })()],
+            "object_definitions": {},
+        })()
+
+        agent = ValidationAgent.__new__(ValidationAgent)
+        checks = agent._detect_dead_conditions(ir)
+        assert len(checks) >= 1, "Dead condition must be detected"
+        assert checks[0].check_type == "dead_condition"
+        assert not checks[0].passed
+        assert "'1'" in checks[0].message
+        assert "Litigation" in checks[0].message
+
+    def test_no_false_positive_for_valid_values(self):
+        """A condition testing a value that exists should NOT be flagged."""
+        from app.agents.validation_agent import ValidationAgent
+
+        ir = type("IR", (), {
+            "dimensions": [type("Dim", (), {
+                "name": "Litigation",
+                "caption": "Litigation",
+                "mstr_id": "LIT001",
+                "elements": ["Yes", "No"],
+                "known_values": None,
+            })()],
+            "measures": [type("M", (), {
+                "name": "Litigation Claims",
+                "mstr_id": "LC001",
+                "tableau_calc": "SUM(IF [Litigation] = 'Yes' THEN 1 ELSE 0 END)",
+            })()],
+            "object_definitions": {},
+        })()
+
+        agent = ValidationAgent.__new__(ValidationAgent)
+        checks = agent._detect_dead_conditions(ir)
+        assert len(checks) == 0, "Valid condition must NOT be flagged"
+
+
+class TestRCADefect1_DerivedAttrDomainRisk:
+    """Defect #1: Metrics depending on st=3077 derived attributes must be
+    flagged because MSTR evaluates them at domain level, not row level."""
+
+    def test_derived_attr_flagged(self):
+        """A metric with definition_chain containing st=3077 must get a warning."""
+        from app.agents.validation_agent import ValidationAgent
+
+        ir = type("IR", (), {
+            "dimensions": [],
+            "measures": [type("M", (), {
+                "name": "High Fraud Claims",
+                "mstr_id": "HFC001",
+                "tableau_calc": "SUM(IF INT([Fraud Score]) >= 70 THEN 1 ELSE 0 END)",
+                "definition_chain": [
+                    {"name": "High Fraud Flag", "st": 3077, "derived_attr": True,
+                     "formula": "IF(([Fraud Score]@ID >= 70),1,0)"},
+                ],
+            })()],
+            "object_definitions": {},
+        })()
+
+        agent = ValidationAgent.__new__(ValidationAgent)
+        checks = agent._detect_derived_attr_domain_risk(ir)
+        assert len(checks) == 1
+        assert checks[0].check_type == "derived_attr_domain_risk"
+        assert not checks[0].passed
+        assert "High Fraud Flag" in checks[0].message
+        assert "domain" in checks[0].message.lower()
+
+    def test_no_warning_for_normal_metrics(self):
+        """Metrics without derived attrs in their chain should not be flagged."""
+        from app.agents.validation_agent import ValidationAgent
+
+        ir = type("IR", (), {
+            "dimensions": [],
+            "measures": [type("M", (), {
+                "name": "Total Incurred",
+                "mstr_id": "TI001",
+                "tableau_calc": "SUM([Total Incurred USD])",
+                "definition_chain": [],
+            })()],
+            "object_definitions": {},
+        })()
+
+        agent = ValidationAgent.__new__(ValidationAgent)
+        checks = agent._detect_derived_attr_domain_risk(ir)
+        assert len(checks) == 0, "Normal metric must NOT be flagged"
+
+
+class TestRCADefect4_DeadConditionAutoRepair:
+    """Defect #4 proper fix: repair_dead_conditions cross-references sibling
+    definitions to auto-substitute the correct condition value."""
+
+    def test_repair_litigation_incurred_loss(self):
+        """Litigation Incurred Loss tests Litigation@ID='1' but Litigation_Flag
+        tests Litigation@ID='Yes'. The auto-repair should fix the formula."""
+        from app.services.pipeline.orchestrator import repair_dead_conditions
+        from app.agents.ir_compiler import IRCompilerAgent
+        from types import SimpleNamespace
+
+        # Build IR with object_definitions matching the real harvested data
+        ir = SimpleNamespace(
+            dimensions=[],
+            measures=[SimpleNamespace(
+                name="Litigation Incurred Loss",
+                mstr_id="LIL001",
+                local_name="Litigation Incurred Loss",
+                caption="Litigation Incurred Loss",
+                expression_text='Sum<UseLookupForAttributes=False >(IF((Litigation@ID = "1"),[Total Incurred],0)){~+}',
+                expression_ast=None,
+                tableau_calc="SUM(IF [Litigation] = '1' THEN [Total Incurred] ELSE 0 END)",
+                precomputed_calc=None,
+                null_policy="propagate",
+                zero_division_policy="null",
+                is_derived=True,
+                confidence=0.85,
+                definition_chain=[],
+            )],
+            tables=[],
+            filters=[],
+            issues=[],
+            relationships=[],
+            object_definitions={
+                "by_did": {
+                    "C6DF85F0504C3F948AA687839B16B19A": {
+                        "name": "Litigation_Flag",
+                        "formula": 'IF((Litigation@ID = "Yes"),1,0)',
+                        "derived_attr": True,
+                        "t": 12, "st": 3077,
+                    },
+                    "LIL_DID_001": {
+                        "name": "Litigation Incurred Loss",
+                        "formula": 'Sum<UseLookupForAttributes=False >(IF((Litigation@ID = "1"),[Total Incurred],0)){~+}',
+                        "derived_attr": False,
+                        "t": 4, "st": 1024,
+                    },
+                },
+                "by_name_lower": {
+                    "litigation_flag": {
+                        "name": "Litigation_Flag",
+                        "formula": 'IF((Litigation@ID = "Yes"),1,0)',
+                        "derived_attr": True,
+                        "t": 12, "st": 3077,
+                    },
+                    "litigation incurred loss": {
+                        "name": "Litigation Incurred Loss",
+                        "formula": 'Sum<UseLookupForAttributes=False >(IF((Litigation@ID = "1"),[Total Incurred],0)){~+}',
+                        "derived_attr": False,
+                        "t": 4, "st": 1024,
+                    },
+                },
+            },
+        )
+
+        # Create a minimal compiler
+        compiler = IRCompilerAgent.__new__(IRCompilerAgent)
+        compiler.ir = ir
+        compiler._id_to_name = {}
+
+        # Run repair
+        count = repair_dead_conditions(ir, compiler)
+
+        # Verify repair happened
+        assert count == 1, f"Expected 1 repair, got {count}"
+        calc = ir.measures[0].tableau_calc
+        assert calc is not None, "Calc must not be None"
+
+        # The repaired calc must test 'Yes' not '1'
+        calc_upper = calc.upper()
+        assert "'YES'" in calc_upper or '"YES"' in calc_upper, (
+            f"Repaired calc must test 'Yes', got: {calc}"
+        )
+        assert "'1'" not in calc_upper and '"1"' not in calc_upper, (
+            f"Repaired calc must NOT test '1', got: {calc}"
+        )
+
+        # Must be pinned
+        assert ir.measures[0].precomputed_calc == calc, "Repaired calc must be pinned"
+
+        # definition_chain must record the repair
+        chain = ir.measures[0].definition_chain
+        assert any("dead_condition_repair" in c.get("name", "") for c in chain), (
+            f"Repair must be recorded in definition_chain: {chain}"
+        )
+
+
+

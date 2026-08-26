@@ -31,6 +31,7 @@ interface CalculationItem {
   hasTarget: boolean;
   mstrId?: string;
   aliasOf?: string;
+  definitionChain?: { name: string; formula: string }[];
 }
 
 export default function LogicExplorer() {
@@ -120,6 +121,7 @@ export default function LogicExplorer() {
             hasSource,
             hasTarget,
             mstrId: o.mstr_id,
+            definitionChain: Array.isArray(o.definition_chain) ? o.definition_chain : undefined,
           };
         });
 
@@ -304,6 +306,26 @@ export default function LogicExplorer() {
                               nothing.
                             </code>
                           </pre>
+                        )}
+                        {item.definitionChain && item.definitionChain.length > 0 && (
+                          <div className={styles.definitionChain}>
+                            {item.definitionChain.map((d, di) => (
+                              <div key={di} className={styles.chainRow}>
+                                <span className={styles.chainGlyph}>
+                                  {di === 0 ? '└─' : '  ├─'}
+                                </span>
+                                <span className={styles.chainName}>{d.name}</span>
+                                <span className={styles.chainAssign}>≔</span>
+                                <code className={styles.chainFormula}>{d.formula}</code>
+                                <span
+                                  className={styles.chainBadge}
+                                  title="Definition harvested from the MicroStrategy dossier instance payload (ground truth)"
+                                >
+                                  ● harvested
+                                </span>
+                              </div>
+                            ))}
+                          </div>
                         )}
                       </div>
 

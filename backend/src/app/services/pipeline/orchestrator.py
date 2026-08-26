@@ -16,6 +16,7 @@ import dataclasses
 import json
 import logging
 import os
+import re
 import shutil
 import traceback
 from datetime import datetime, timezone
@@ -109,6 +110,384 @@ def _f_text_is_plain_aggregate(f_text: str) -> bool:
     return bool(_re.fullmatch(
         r"(?i)(SUM|AVG|COUNT|MIN|MAX)\(\s*\[?[^\[\]()]+\]?\s*\)", core,
     ))
+
+
+def _att_entry_formula(entry: dict) -> tuple:
+    """
+    Extract (formula, source_field) from an instance-payload attribute entry.
+
+    Two observed payload generations:
+      * legacy:  {"n":…, "did":…, "f": "<formula>"}                    (att-level f)
+      * current: {"n":…, "did":…, "da": true, "fs":[{…"f":…}]}          (form-level f,
+                 typically on the ID form; `da:true` marks derived attributes)
+    """
+    f_text = entry.get("f")
+    if isinstance(f_text, str) and f_text.strip():
+        return f_text.strip(), "f"
+    forms = entry.get("fs") or []
+    id_form = next((x for x in forms if isinstance(x, dict) and x.get("fnm") == "ID"), None)
+    ordered = ([id_form] if id_form else []) + [x for x in forms if x is not id_form]
+    for form in ordered:
+        if not isinstance(form, dict):
+            continue
+        fv = form.get("f")
+        if isinstance(fv, str) and fv.strip():
+            return fv.strip(), f"fs:{form.get('fnm', '?')}"
+    return None, None
+
+
+def collect_object_definitions(ds_map) -> tuple:
+    """
+    Harvest EVERY dataset-object definition from a dossier instance payload.
+
+    The payload carries two arrays per dataset:
+      datasets{dsId}.att[] — attributes; DERIVED attributes carry their native
+                             formula either at entry level (`f`) or inside a
+                             form (`fs[].f`) — see _att_entry_formula().
+      datasets{dsId}.mx[]  — metrics (`f`, `mexp`, `um`).
+
+    Returns (by_did, by_name_lower). Keep-first on conflicting duplicate dids.
+    """
+    import logging as _logging
+    by_did: dict = {}
+    for ds_id, ds in (ds_map or {}).items():
+        if not isinstance(ds, dict):
+            continue
+        for key in ("att", "mx"):
+            for entry in (ds.get(key) or []) or []:
+                if not isinstance(entry, dict):
+                    continue
+                did = entry.get("did")
+                f_text = entry.get("f")
+                src = "f"
+                if key == "att":
+                    f_text, src = _att_entry_formula(entry)
+                elif not (isinstance(f_text, str) and f_text.strip()):
+                    continue
+                if not did or not f_text:
+                    continue
+                rec = {
+                    "name": (entry.get("n") or "").strip(),
+                    "formula": f_text,
+                    "source_field": src,
+                    "derived_attr": bool(entry.get("da")) or entry.get("st") == 3077,
+                    "t": entry.get("t"),
+                    "st": entry.get("st"),
+                    "um": bool(entry.get("um")),
+                    "dsc": (entry.get("dsc") or "").strip(),
+                    "dataset_id": ds_id,
+                }
+                if did in by_did and by_did[did]["formula"] != rec["formula"]:
+                    _logging.getLogger(__name__).warning(
+                        "Conflicting dataset definitions for %s (%s) — keeping first",
+                        rec["name"], did,
+                    )
+                    continue
+                by_did[did] = rec
+    by_name: dict = {}
+    for rec in by_did.values():
+        n = rec["name"].lower()
+        if n:
+            by_name.setdefault(n, rec)
+    return by_did, by_name
+
+
+_AGG_KW = r"(?:SUM|AVG|MIN|MAX|COUNTD|COUNT|MEDIAN)"
+# AGG_OUT(AGG_IN([single field])) — e.g. SUM(COUNT([Claim ID])) in a rate
+# denominator. MSTR's report-level wrapper over a single aggregate call is
+# ONE aggregate in Tableau; nesting them is illegal ("cannot nest aggregates").
+_NESTED_SINGLE_FIELD_RE = re.compile(
+    rf"\b{_AGG_KW}\(\s*({_AGG_KW})\(\s*(\[[^\]]+\])\s*\)\s*\)",
+    re.IGNORECASE,
+)
+# Inner aggregate around a bare field inside an IF branch that is itself under
+# an outer aggregation: Sum(IF(c, [Total Incurred], 0)) with [Total Incurred]
+# expanded to SUM([Total Incurred USD]) produced THEN SUM([...]) — dissolve.
+_IF_BRANCH_AGG_RE = re.compile(
+    rf"\b(THEN|ELSE)\s+({_AGG_KW})\(\s*(\[[^\]]+\])\s*\)",
+    re.IGNORECASE,
+)
+
+
+def _dissolve_nested_aggregates(calc: str) -> str:
+    """
+    Make expanded calcs legal for Tableau by flattening nested single-field
+    aggregations introduced when inlined definition bodies carry their own
+    aggregation wrappers:
+      SUM(COUNT([Claim ID]))                          → COUNT([Claim ID])
+      SUM(IF (c) THEN SUM([Total Incurred USD]) …)    → SUM(IF (c) THEN [Total Incurred USD] …)
+    ZN(...) and {FIXED …} LOD wrappers are not touched (ZN isn't an agg
+    keyword here; LOD braces don't match the inner-call shape).
+    """
+    if not calc:
+        return calc
+    prev = None
+    while prev != calc:                      # handle repeated nesting
+        prev = calc
+        calc = _NESTED_SINGLE_FIELD_RE.sub(r"\1(\2)", calc)
+        calc = _IF_BRANCH_AGG_RE.sub(r"\1 \3", calc)
+    return calc
+
+
+def apply_definition_expansions(ir, compiler) -> int:
+    """
+    Recompile measures whose raw formula references harvested dataset-derived
+    object definitions (High Fraud Flag, Net Loss, Litigation_Flag, …).
+
+    For each affected measure:
+      * resolve raw MSTR text against ir.object_definitions (recursive, cycle-safe)
+      * compile the RESOLVED text via the standard compiler
+      * pin the result via `precomputed_calc` so AITranslationAgent skips it
+        (its candidate filter refuses measures carrying precomputed_calc)
+      * record the expansion order in `definition_chain` for API/UI lineage
+
+    The measure's raw `expression_text` is preserved untouched — it remains the
+    honest "what MicroStrategy stores" source shown in Calculation Logic
+    Conversion. Returns the number of measures expanded.
+    """
+    from app.agents.expression_resolver import resolve_expression
+
+    od = getattr(ir, "object_definitions", None) or {}
+    by_did = od.get("by_did") or {}
+    by_name = od.get("by_name_lower") or {}
+    if not by_did:
+        return 0
+
+    count = 0
+    for m in ir.measures:
+        raw = (getattr(m, "expression_text", None) or "").strip()
+        if not raw:
+            continue
+        try:
+            res = resolve_expression(raw, by_did, by_name)
+        except Exception as re_err:                       # resolver must never kill the stage
+            logger.warning("Resolver error for %s: %s", getattr(m, "name", "?"), re_err)
+            continue
+        if not res.chain:
+            continue                                       # no harvested refs involved
+
+        original_text = m.expression_text
+        original_precomputed = getattr(m, "precomputed_calc", None)
+        original_ast = getattr(m, "expression_ast", None)
+        calc = None
+        try:
+            # Compiler priority is precomputed_calc → mexp AST → text. Both
+            # fast paths must be neutralized: precomputed echoes a stale stub,
+            # and the raw mexp tree references derived objects by GUID — its
+            # unknown-did fallback emits literal SELF-references
+            # (SUM([High Fraud Claims])), the exact defect this pass replaces.
+            # Force the TEXT path with the fully-resolved formula.
+            m.precomputed_calc = None
+            m.expression_ast = None
+            m.expression_text = res.text
+            calc = compiler._compile_expression(
+                m, m.null_policy, m.zero_division_policy,
+            )
+        except Exception as ce:
+            logger.warning(
+                "Definition expansion compile failed for %s (keeping %s): %s",
+                getattr(m, "name", "?"), getattr(m, "tableau_calc", None), ce,
+            )
+        finally:
+            m.expression_text = original_text
+            m.expression_ast = original_ast      # provenance AST stays intact
+
+        if isinstance(calc, str):
+            calc = _dissolve_nested_aggregates(calc)
+
+        own_names = {
+            str(getattr(m, attr, "") or "").strip().lower()
+            for attr in ("local_name", "caption", "name")
+        } - {""}
+        calc_stripped = calc.strip() if isinstance(calc, str) else ""
+        self_ref = any(
+            calc_stripped.lower() in (f"sum([{n}])", f"[{n}]") for n in own_names
+        )
+
+        if calc_stripped and not calc_stripped.startswith("//") and not self_ref:
+            m.tableau_calc = calc
+            m.precomputed_calc = calc                      # AI stage must not override
+            m.definition_chain = res.chain
+            if res.unresolved and hasattr(m, "is_derived"):
+                m.is_derived = True                        # partial expansion still derived
+            count += 1
+            logger.info(
+                "definition expansion: %s ← %s",
+                getattr(m, "name", "?"),
+                " → ".join(c["name"] for c in res.chain),
+            )
+        else:
+            m.precomputed_calc = original_precomputed      # restore prior state
+    return count
+
+
+# ── Attribute condition value extracted from MSTR formula patterns ──────
+# Matches: Attribute@ID = "value" or [Attribute]@ID = "value" (in MSTR native text)
+_ATTR_CONDITION_RE = re.compile(
+    r"""
+    (?:\[([^\]]+)\]|\b([A-Za-z_][A-Za-z0-9_ ]*?))\s*@ID\s*=\s*
+    [\\]*["']([^"'\\]+)[\\]*["']
+    """,
+    re.VERBOSE | re.IGNORECASE,
+)
+
+# Matches: [Field] = 'value' or [Field] = "value" (in compiled Tableau calc)
+_TABLEAU_CONDITION_RE = re.compile(
+    r"""\[([^\]]+)\]\s*=\s*['"]([^'"]+)['"]""",
+)
+
+
+def repair_dead_conditions(ir, compiler) -> int:
+    """
+    Cross-reference harvested definitions to auto-repair dead conditions.
+
+    When a metric formula tests `Attribute@ID = 'X'` but sibling definitions
+    in the same object_definitions collection test the SAME attribute with a
+    DIFFERENT value 'Y', this pass substitutes X → Y in the raw MSTR formula,
+    recompiles to Tableau, and pins via precomputed_calc.
+
+    Example (Defect #4, RCA-VERIFIED.md):
+      Litigation Incurred Loss = Sum(IF((Litigation@ID = "1"), ...))    ← tests "1"
+      Litigation_Flag          = IF((Litigation@ID = "Yes"), 1, 0)      ← tests "Yes"
+      Data has: "Yes" and "No" only → "1" is a dead condition.
+
+    After repair:
+      Litigation Incurred Loss = SUM(IF [Litigation] = 'Yes' THEN [Total Incurred USD] ELSE 0 END)
+
+    Returns number of measures repaired.
+    """
+    from app.agents.expression_resolver import resolve_expression
+
+    od = getattr(ir, "object_definitions", None) or {}
+    by_name = od.get("by_name_lower") or {}
+    by_did = od.get("by_did") or {}
+    if not by_name:
+        return 0
+
+    # Step 1: Build an attribute→tested_values map from ALL harvested definitions.
+    # Each definition that tests an attribute condition contributes its tested value.
+    # Example: Litigation_Flag tests Litigation@ID = "Yes"
+    #          Litigation Incurred Loss tests Litigation@ID = "1"
+    # → attr_tested_values["litigation"] = {"Yes": ["Litigation_Flag"], "1": ["Litigation Incurred Loss"]}
+    attr_tested_values: dict[str, dict[str, list[str]]] = {}  # attr_lower → {value → [def_names]}
+    for d in by_name.values():
+        formula = d.get("formula", "")
+        if not formula:
+            continue
+        for m in _ATTR_CONDITION_RE.finditer(formula):
+            attr_name = (m.group(1) or m.group(2)).strip().lower()
+            test_val = m.group(3).strip()
+            attr_tested_values.setdefault(attr_name, {}).setdefault(test_val, []).append(d["name"])
+
+    # Step 2: For each attribute, identify the "canonical" value — the one used
+    # by the most definitions. If there's a tie, prefer descriptive/display values
+    # over numeric ID codes (e.g., "Yes" > "1", "Active" > "0").
+    def _val_pref(v: str) -> tuple:
+        return (not v.strip().isdigit(), len(v.strip()), v.strip())
+
+    attr_canonical: dict[str, str] = {}  # attr_lower → canonical value
+    for attr, val_map in attr_tested_values.items():
+        if len(val_map) <= 1:
+            continue  # only one value tested — nothing to repair
+        # Sort descending by (definition count, value preference)
+        ranked = sorted(
+            val_map.items(),
+            key=lambda kv: (len(kv[1]), _val_pref(kv[0])),
+            reverse=True,
+        )
+        canonical_val = ranked[0][0]
+        attr_canonical[attr] = canonical_val
+        if len(ranked) > 1:
+            logger.info(
+                "Dead-condition repair: attribute '%s' tested with values %s — "
+                "canonical value is '%s' (used by %s)",
+                attr, dict(val_map), canonical_val, val_map[canonical_val],
+            )
+
+    if not attr_canonical:
+        return 0
+
+    # Step 3: For each measure, check if its formula tests a NON-canonical value.
+    # If so, substitute the value in the raw MSTR text, resolve, recompile, and pin.
+    repaired = 0
+    for m_obj in ir.measures:
+        raw = (getattr(m_obj, "expression_text", None) or "").strip()
+        if not raw:
+            continue
+
+        # Find all condition tests in this formula
+        repairs_needed = []
+        for match in _ATTR_CONDITION_RE.finditer(raw):
+            attr_name = (match.group(1) or match.group(2)).strip().lower()
+            test_val = match.group(3).strip()
+            canonical = attr_canonical.get(attr_name)
+            if canonical and test_val != canonical:
+                repairs_needed.append((attr_name, test_val, canonical, match))
+
+        if not repairs_needed:
+            continue
+
+        # Apply substitutions to raw MSTR formula text
+        repaired_text = raw
+        for attr_name, old_val, new_val, _ in repairs_needed:
+            # Replace the specific value in the formula, preserving structure
+            # "1" → "Yes" or \"1\" → \"Yes\"
+            repaired_text = repaired_text.replace(f'"{old_val}"', f'"{new_val}"')
+            repaired_text = repaired_text.replace(f"'{old_val}'", f"'{new_val}'")
+            repaired_text = repaired_text.replace(f'\\"{old_val}\\"', f'\\"{new_val}\\"')
+            logger.info(
+                "Dead-condition repair: %s — [%s]@ID = '%s' → '%s'",
+                getattr(m_obj, "name", "?"), attr_name, old_val, new_val,
+            )
+
+        # Resolve the repaired text against harvested definitions
+        try:
+            res = resolve_expression(repaired_text, by_did, by_name)
+            resolved_text = res.text
+        except Exception:
+            resolved_text = repaired_text
+
+        # Recompile via standard compiler
+        original_text = m_obj.expression_text
+        original_ast = getattr(m_obj, "expression_ast", None)
+        original_precomputed = getattr(m_obj, "precomputed_calc", None)
+        try:
+            m_obj.precomputed_calc = None
+            m_obj.expression_ast = None
+            m_obj.expression_text = resolved_text
+            calc = compiler._compile_expression(
+                m_obj, m_obj.null_policy, m_obj.zero_division_policy,
+            )
+        except Exception as ce:
+            logger.warning(
+                "Dead-condition repair compile failed for %s: %s",
+                getattr(m_obj, "name", "?"), ce,
+            )
+            calc = None
+        finally:
+            m_obj.expression_text = original_text
+            m_obj.expression_ast = original_ast
+
+        if isinstance(calc, str):
+            calc = _dissolve_nested_aggregates(calc)
+
+        if calc and not calc.startswith("//"):
+            m_obj.tableau_calc = calc
+            m_obj.precomputed_calc = calc
+            m_obj.definition_chain = getattr(m_obj, "definition_chain", []) or []
+            m_obj.definition_chain.append({
+                "name": "dead_condition_repair",
+                "formula": f"repaired: {', '.join(f'[{a}]@ID {o!r}→{n!r}' for a, o, n, _ in repairs_needed)}",
+            })
+            repaired += 1
+            logger.info(
+                "Dead-condition repaired: %s → %s",
+                getattr(m_obj, "name", "?"), calc[:120],
+            )
+        else:
+            m_obj.precomputed_calc = original_precomputed
+
+    return repaired
 
 
 def classify_physical_measures(measure_dicts: list, bundle_asts: Optional[dict] = None) -> list:
@@ -576,7 +955,9 @@ class PipelineOrchestrator:
                     # Harvest REAL metric formulas: GET /api/dossiers/{id}/instances/{mid}
                     # returns datasets{dsId}.mx[] with per-metric `f` (native formula),
                     # `mexp` (expression tree {ft,args}), `aggFunc`, `um` (derived flag).
-                    # This is the ground truth that replaces name-based guessing.
+                    # datasets{dsId}.att[] additionally carries DERIVED ATTRIBUTE
+                    # definitions (subType 3077, e.g. High Fraud Flag ≔ IF(…)).
+                    # Together they are the ground truth that replaces name-based guessing.
                     try:
                         inst_full = sync_session.get_dossier_instance(dossier_id, d_iid)
                         ds_map = inst_full.get("datasets") if isinstance(inst_full, dict) else None
@@ -586,6 +967,12 @@ class PipelineOrchestrator:
                                     did = entry.get("did")
                                     if did:
                                         mx_formulas[did] = entry
+                            defs_did, defs_name = collect_object_definitions(ds_map)
+                            if defs_did:
+                                ir.object_definitions.setdefault("by_did", {}).update(defs_did)
+                                ir.object_definitions.setdefault("by_name_lower", {}).update(
+                                    {k: v for k, v in defs_name.items()
+                                     if k not in ir.object_definitions["by_name_lower"]})
                         logger.info("Harvested %d metric formulas from dossier instance", len(mx_formulas))
                     except Exception as fe:
                         logger.warning("Formula harvest failed for dossier %s: %s", dossier_id, fe)
@@ -723,6 +1110,13 @@ class PipelineOrchestrator:
                         if new_calc and not new_calc.lstrip().startswith("//"):
                             logger.info("mx formula applied: %s → %s", m.name, new_calc[:90])
                             m.tableau_calc = new_calc
+                            # Pin simple row-level MAX/MIN calcs: the AI stage
+                            # historically wrapped these in {FIXED : SUM(…)},
+                            # which turns "max single claim" into "grand total"
+                            # (Defect #3, RCA-VERIFIED.md).
+                            _upper = new_calc.strip().upper()
+                            if _upper.startswith(("MAX(", "MIN(")) and _upper.count("(") == 1:
+                                m.precomputed_calc = new_calc
                             enriched += 1
                     except Exception as me:
                         # Keep prior calc; the discrepancy stays visible in logs.
@@ -733,6 +1127,37 @@ class PipelineOrchestrator:
             logger.info(
                 "MSTR formula enrichment: %d/%d measures recompiled from instance formulas",
                 enriched, len(ir.measures),
+            )
+
+        # ── Ground-truth definition expansion (derived attrs + chained defs) ──
+        # Measures whose raw formula references dataset-derived objects
+        # (High Fraud Flag, Net Loss, Litigation_Flag, …) are recompiled from
+        # the TRUE harvested definitions. The result is pinned via
+        # precomputed_calc so the AI-translation stage can never override it
+        # with a cached guess (the Tier-1 cache historically invented, among
+        # others, Net Loss = Incurred − Recovery − Salvage).
+        expanded = apply_definition_expansions(ir, compiler)
+        if expanded:
+            logger.info(
+                "Definition expansion: %d measure(s) compiled from harvested dataset definitions",
+                expanded,
+            )
+            try:
+                with open(os.path.join(artifacts_dir, "object_definitions.json"), "w", encoding="utf-8") as f:
+                    json.dump(ir.object_definitions or {}, f, indent=2, default=str)
+            except Exception as pe:
+                logger.warning("Could not persist object_definitions.json: %s", pe)
+
+        # ── Dead-condition auto-repair (Defect #4, RCA-VERIFIED.md) ──────
+        # Cross-references sibling definitions in object_definitions to fix
+        # metrics whose condition tests a value absent from the data.
+        # Example: Litigation Incurred Loss tests @ID="1" but Litigation_Flag
+        # tests @ID="Yes" — repairs "1" → "Yes" and recompiles.
+        repaired = repair_dead_conditions(ir, compiler)
+        if repaired:
+            logger.info(
+                "Dead-condition repair: %d measure(s) auto-repaired from sibling definitions",
+                repaired,
             )
 
         # Build canonical ID lookup map from compiled IR for ground-truth resolution
