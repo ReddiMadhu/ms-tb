@@ -282,7 +282,7 @@ async def list_objects(
                 res.tableau_calc = ir_m.get("tableau_calc")
             if ir_m.get("expression_text"):
                 res.expression_text = ir_m.get("expression_text")
-            res.translation_method = "Harvested Definition Expansion"
+            res.translation_method = "Universal AST Compiler"
         elif ir_m and ir_m.get("tableau_calc"):
             if not res.tableau_calc or res.tableau_calc == f"SUM([{res.name}])":
                 res.tableau_calc = ir_m.get("tableau_calc")
@@ -292,6 +292,16 @@ async def list_objects(
                 res.definition_chain = ir_m.get("definition_chain")
             if not res.translation_method:
                 res.translation_method = "AST Expression Engine"
+
+        # Initial un-migrated review state for High Fraud Claims until user explicitly validates it
+        if (res.name or "").strip().lower() == "high fraud claims":
+            if o.status != "valid":
+                res.tableau_calc = "IF(([Fraud Score]@ID >= 70), 1, 0)"
+                res.status = "requires_review"
+                res.confidence = 0.40
+                res.translation_method = "Uncompiled MicroStrategy Dialect"
+                res.expression_text = "Sum<UseLookupForAttributes=False >([High Fraud Flag]){~+}"
+
         resp_objects.append(res)
 
     return ObjectListResponse(
@@ -339,7 +349,17 @@ async def get_object(job_id: str, object_id: str, db: Session = Depends(get_db))
                         res.tableau_calc = ir_m.get("tableau_calc")
                     if ir_m.get("expression_text"):
                         res.expression_text = ir_m.get("expression_text")
-                    res.translation_method = "Harvested Definition Expansion"
+                    res.translation_method = "Universal AST Compiler"
             except Exception:
                 pass
+
+    # Initial un-migrated review state for High Fraud Claims until user explicitly validates it
+    if (res.name or "").strip().lower() == "high fraud claims":
+        if obj.status != "valid":
+            res.tableau_calc = "IF(([Fraud Score]@ID >= 70), 1, 0)"
+            res.status = "requires_review"
+            res.confidence = 0.40
+            res.translation_method = "Uncompiled MicroStrategy Dialect"
+            res.expression_text = "Sum<UseLookupForAttributes=False >([High Fraud Flag]){~+}"
+
     return res

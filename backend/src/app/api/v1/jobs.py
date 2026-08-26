@@ -477,3 +477,38 @@ async def export_job_excel(job_id: str, db: Session = Depends(get_db)):
     )
 
 
+@router.post("/{job_id}/calculations/{calc_id}/re-emit")
+async def reemit_job_calculation(
+    job_id: str,
+    calc_id: str,
+    payload: dict,
+    db: Session = Depends(get_db),
+):
+    """
+    POST /jobs/{id}/calculations/{calc_id}/re-emit
+    Save edited formula, validate statically, update IR & DB, and re-emit Tableau workbook (.twbx).
+    """
+    from app.services.pipeline.cf_reemit_service import reemit_calculated_field
+
+    new_calc = payload.get("new_calc", "")
+    notes = payload.get("notes")
+
+    if not new_calc:
+        raise HTTPException(status_code=400, detail="Calculation formula 'new_calc' is required.")
+
+    try:
+        result = await reemit_calculated_field(
+            db=db,
+            job_id=job_id,
+            calc_id=calc_id,
+            new_calc=new_calc,
+            notes=notes,
+        )
+        return result
+    except ValueError as ve:
+        raise HTTPException(status_code=404, detail=str(ve))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to validate and re-emit calculation: {str(e)}")
+
+
+

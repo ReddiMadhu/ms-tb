@@ -599,4 +599,31 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(data),
     }),
+
+  // 13. Calculated Field (CF) Re-validation & Workbook Emission
+  revalidateAndEmitCalc: (
+    jobId: string,
+    calcId: string,
+    data: { new_calc: string; notes?: string }
+  ) =>
+    fetchJSON<CFReemitResponse>(`/jobs/${jobId}/calculations/${calcId}/re-emit`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
 };
+
+export interface CFReemitResponse {
+  success: boolean;
+  validation_passed: boolean;
+  validation_checks: Array<{ check: string; status: 'passed' | 'failed'; message: string }>;
+  steps: Array<{ step: string; status: 'completed' | 'in_progress' | 'pending' | 'failed'; detail: string }>;
+  updated_calc: string;
+  artifact?: {
+    id: string;
+    file_name: string;
+    size_bytes: number;
+    download_url: string;
+  };
+  message: string;
+}
+

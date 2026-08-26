@@ -7,7 +7,7 @@
   margin: 0 auto;
 }
 
-/* ── Definition chain (harvested ground-truth lineage) ── */
+/* ── Definition chain (expanded definition lineage) ── */
 .definitionChain {
   margin-top: 0.5rem;
   padding: 0.5rem 0.65rem;
@@ -46,19 +46,6 @@
   font-size: 0.75rem;
   color: var(--ink-2);
   word-break: break-all;
-}
-
-.chainBadge {
-  margin-left: auto;
-  font-size: 0.62rem;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--green, #22c55e);
-  border: 1px solid color-mix(in srgb, var(--green, #22c55e) 45%, transparent);
-  border-radius: 999px;
-  padding: 0.05rem 0.45rem;
-  white-space: nowrap;
 }
 
 /* ── KPI Grid ── */
@@ -404,3 +391,399 @@
   color: var(--ink-3);
   font-size: 0.875rem;
 }
+
+/* ── Formula Editor & Action Styles ── */
+.editBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--surface-hover, rgba(255, 255, 255, 0.08));
+  border: 1px solid var(--line);
+  color: var(--ink);
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.editBtn:hover {
+  background: var(--primary-tint, rgba(99, 102, 241, 0.15));
+  border-color: var(--primary, #6366f1);
+  color: var(--primary, #6366f1);
+}
+
+.editorContainer {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 1rem;
+  background: var(--field, #090d13);
+  border: 1px solid var(--line-strong, rgba(99, 102, 241, 0.3));
+  border-radius: 6px;
+  margin: 0.75rem 1rem 1rem 1rem;
+}
+
+.editorHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.editorTitle {
+  font-size: 0.8125rem;
+  font-weight: 700;
+  color: var(--ink);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.syntaxIndicators {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.syntaxChip {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  color: var(--ink-2);
+}
+
+.syntaxChipValid {
+  background: rgba(34, 197, 94, 0.1);
+  border-color: rgba(34, 197, 94, 0.3);
+  color: var(--green, #22c55e);
+}
+
+.syntaxChipWarn {
+  background: rgba(234, 179, 8, 0.1);
+  border-color: rgba(234, 179, 8, 0.3);
+  color: var(--yellow, #eab308);
+}
+
+.syntaxChipError {
+  background: rgba(239, 68, 68, 0.1);
+  border-color: rgba(239, 68, 68, 0.3);
+  color: var(--red, #ef4444);
+}
+
+.formulaTextarea {
+  width: 100%;
+  min-height: 100px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--surface-alt, #0d1117);
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  color: var(--green-text, #a7f3d0);
+  outline: none;
+  resize: vertical;
+  transition: border-color 0.15s ease;
+}
+
+.formulaTextarea:focus {
+  border-color: var(--primary, #6366f1);
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2);
+}
+
+.editorFooter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.editorHelp {
+  font-size: 0.75rem;
+  color: var(--ink-3);
+}
+
+.editorActions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.saveValidateBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--primary, #6366f1);
+  color: white;
+  border: none;
+  padding: 6px 14px;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.saveValidateBtn:hover:not(:disabled) {
+  background: var(--primary-hover, #4f46e5);
+  box-shadow: 0 0 12px rgba(99, 102, 241, 0.4);
+}
+
+.saveValidateBtn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.cancelBtn {
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--ink-2);
+  padding: 6px 12px;
+  font-size: 0.8125rem;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.cancelBtn:hover {
+  background: var(--surface-hover, rgba(255, 255, 255, 0.08));
+  color: var(--ink);
+}
+
+/* ── Live Stage Execution Modal ── */
+.modalBackdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 1.5rem;
+  animation: fadeIn 0.2s ease-out;
+}
+
+.modalCard {
+  background: var(--surface, #131822);
+  border: 1px solid var(--line-strong, rgba(99, 102, 241, 0.4));
+  border-radius: 12px;
+  width: 100%;
+  max-width: 680px;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.5), 0 0 30px rgba(99, 102, 241, 0.15);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: slideUp 0.25s ease-out;
+}
+
+.modalHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1.2rem 1.5rem;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-alt, rgba(0, 0, 0, 0.2));
+}
+
+.modalTitleGroup {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.modalTitle {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--ink);
+  margin: 0;
+}
+
+.modalSubtitle {
+  font-size: 0.75rem;
+  color: var(--ink-3);
+  margin: 2px 0 0 0;
+}
+
+.modalCloseBtn {
+  background: transparent;
+  border: none;
+  color: var(--ink-3);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.modalCloseBtn:hover {
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.modalBody {
+  padding: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  max-height: 70vh;
+  overflow-y: auto;
+}
+
+.stageStepper {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.stepItem {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.85rem;
+  padding: 0.85rem 1rem;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--surface-alt, rgba(255, 255, 255, 0.02));
+  transition: all 0.2s ease;
+}
+
+.stepItemCompleted {
+  border-color: rgba(34, 197, 94, 0.3);
+  background: rgba(34, 197, 94, 0.04);
+}
+
+.stepItemActive {
+  border-color: rgba(99, 102, 241, 0.4);
+  background: rgba(99, 102, 241, 0.06);
+  box-shadow: 0 0 15px rgba(99, 102, 241, 0.1);
+}
+
+.stepItemFailed {
+  border-color: rgba(239, 68, 68, 0.4);
+  background: rgba(239, 68, 68, 0.05);
+}
+
+.stepIconWrap {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.stepContent {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+}
+
+.stepHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.stepTitle {
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.stepBadge {
+  font-size: 0.6875rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.stepDetail {
+  font-size: 0.78125rem;
+  color: var(--ink-2);
+  line-height: 1.4;
+}
+
+.checkChipsGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.checkChipCard {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 0.75rem;
+}
+
+.checkChipCardPass {
+  border-color: rgba(34, 197, 94, 0.3);
+  color: var(--green, #22c55e);
+}
+
+.checkChipCardFail {
+  border-color: rgba(239, 68, 68, 0.3);
+  color: var(--red, #ef4444);
+}
+
+.modalFooter {
+  padding: 1.2rem 1.5rem;
+  border-top: 1px solid var(--line);
+  background: var(--surface-alt, rgba(0, 0, 0, 0.2));
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.downloadArtifactBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
+  color: white;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-size: 0.8125rem;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(34, 197, 94, 0.3);
+  transition: all 0.15s ease;
+}
+
+.downloadArtifactBtn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(34, 197, 94, 0.4);
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slideUp {
+  from { transform: translateY(20px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+

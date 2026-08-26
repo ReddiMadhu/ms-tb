@@ -354,3 +354,36 @@ class ReportGenerateResponse(BaseModel):
     generated_at: datetime
     format: str
     summary: dict[str, Any]
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  Calculated Field (CF) Re-emission & Static Validation Schemas
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+class CFReemitRequest(BaseModel):
+    """POST /jobs/{job_id}/calculations/{calc_id}/re-emit"""
+    new_calc: str
+    notes: Optional[str] = None
+
+
+class CFValidationCheckDetail(BaseModel):
+    check: str
+    status: str  # 'passed' | 'failed'
+    message: str
+
+
+class CFExecutionStep(BaseModel):
+    step: str
+    status: str  # 'completed' | 'in_progress' | 'pending' | 'failed'
+    detail: str
+
+
+class CFReemitResponse(BaseModel):
+    success: bool
+    validation_passed: bool
+    validation_checks: list[CFValidationCheckDetail]
+    steps: list[CFExecutionStep]
+    updated_calc: str
+    artifact: Optional[dict[str, Any]] = None
+    message: str
+
