@@ -30,7 +30,6 @@ export const KpiCard: React.FC<KpiCardProps> = ({
       onClick={onClick}
       style={{ cursor: onClick ? 'pointer' : 'default' }}
     >
-      <div className="kpi-card-accent" style={{ backgroundColor: accentColor }} />
       <div className="kpi-card-header">
         <span>{title}</span>
         {icon && <span style={{ color: accentColor }}>{icon}</span>}

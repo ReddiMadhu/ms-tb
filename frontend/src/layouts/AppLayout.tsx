@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { api } from '../api';
 import CommandPalette from '../components/CommandPalette';
+import { MicroStrategyIcon } from '../components/icons/MicroStrategyIcon';
 
 export default function AppLayout() {
   const { theme, toggle } = useTheme();
@@ -93,13 +94,22 @@ export default function AppLayout() {
           }}
         >
           <Link to="/" style={{ textDecoration: 'none', display: 'flex', alignItems: 'center' }}>
-            <div className="sidebar-logo-icon sidebar-brand-icon">M</div>
+            <div
+              className="sidebar-logo-icon sidebar-brand-icon"
+              style={{
+                background: 'var(--field)',
+                border: '1px solid var(--line)',
+                boxShadow: 'none',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              <MicroStrategyIcon size={20} />
+            </div>
             {!sidebarCollapsed && (
               <div className="sidebar-header-text" style={{ marginLeft: 8 }}>
                 <div className="sidebar-logo-text">MicroStrategy → Tableau</div>
-                <div style={{ fontSize: 10, color: 'var(--ink-3)', fontWeight: 500 }}>
-                  Control Center
-                </div>
               </div>
             )}
           </Link>

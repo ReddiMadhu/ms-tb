@@ -316,7 +316,6 @@ export default function Dashboard() {
                 <th>Status</th>
                 <th>Current Stage</th>
                 <th>Objects Progress</th>
-                <th>Confidence</th>
                 <th>Created</th>
                 <th style={{ textAlign: 'right' }}>Actions</th>
               </tr>
@@ -325,8 +324,6 @@ export default function Dashboard() {
               {filteredJobs.map((job) => {
                 const totalObjs = job.progress?.objects_total || job.objects_total || 0;
                 const processedObjs = job.progress?.objects_processed || job.objects_processed || 0;
-                const confidence = job.validation?.structural_confidence;
-                const confidencePercent = confidence !== undefined ? Math.round(confidence * 100) : null;
 
                 return (
                   <tr
@@ -389,28 +386,6 @@ export default function Dashboard() {
                           </div>
                         )}
                       </div>
-                    </td>
-
-                    <td>
-                      {confidencePercent !== null ? (
-                        <span
-                          style={{
-                            fontFamily: 'var(--font-mono)',
-                            fontSize: '0.8125rem',
-                            fontWeight: 700,
-                            color:
-                              confidencePercent >= 95
-                                ? 'var(--green)'
-                                : confidencePercent >= 85
-                                  ? 'var(--yellow)'
-                                  : 'var(--red)',
-                          }}
-                        >
-                          {confidencePercent}%
-                        </span>
-                      ) : (
-                        <span style={{ fontSize: '0.75rem', color: 'var(--ink-3)' }}>—</span>
-                      )}
                     </td>
 
                     <td style={{ fontSize: '0.75rem', color: 'var(--ink-2)' }}>

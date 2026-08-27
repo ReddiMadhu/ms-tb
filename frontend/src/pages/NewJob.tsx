@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Rocket, Search, Database, Server, ChevronRight, CheckCircle2,
-  Sliders, ShieldCheck, AlertTriangle, RefreshCw, Layers, CheckSquare,
+  ShieldCheck, AlertTriangle, RefreshCw, Layers, CheckSquare,
   Square, ArrowLeft, Globe, Lock, KeyRound, Sparkles, Check
 } from 'lucide-react';
 import { api, type DiscoveredDossier, type ConnectionValidation } from '../api';
@@ -11,7 +11,6 @@ import { api, type DiscoveredDossier, type ConnectionValidation } from '../api';
 const STEPS = [
   { label: 'Connection & Validation', icon: Server },
   { label: 'Dossier Estate Discovery', icon: Layers },
-  { label: 'Configure & Launch', icon: Sliders },
 ];
 
 interface FormState {
@@ -222,16 +221,15 @@ export default function NewJobPage() {
       <div className="page-header-gradient">
         <div className="page-header">
           <h1 className="page-title">New Migration Job</h1>
-          <p className="page-subtitle">Configure, validate source connectivity, discover dossiers, and orchestrate pipeline</p>
+          <p className="page-subtitle">Validate source connectivity, discover dossiers, and launch migration</p>
         </div>
 
         {/* ── Wizard Stepper ──────────────────────────────── */}
         <div className="wizard-stepper">
           {STEPS.map((s, i) => {
-            const Icon = s.icon;
             const isCompleted = i < step;
             const isActive = i === step;
-            const canJump = i === 0 || (i === 1 && isConnectionVerified) || (i === 2 && isConnectionVerified);
+            const canJump = i === 0 || (i === 1 && isConnectionVerified);
 
             return (
               <button
@@ -261,70 +259,59 @@ export default function NewJobPage() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.4, ease: [0.23, 1, 0.32, 1] }}
         >
-          <div style={{ display: 'grid', gap: 24, maxWidth: 680 }}>
-            {/* Job Metadata */}
-            <div>
-              <div className="section-header">
-                <div className="section-icon primary">
-                  <Sparkles size={16} />
-                </div>
-                <div>
+          <div className="new-job-grid">
+            {/* ═══ LEFT COLUMN: Source Connection & Identification ═══ */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+              {/* Job Identification */}
+              <div>
+                <div className="section-header" style={{ marginBottom: 10 }}>
                   <div className="section-title">Job Identification</div>
-                  <div className="section-subtitle">Name this migration batch for auditing and reports</div>
-                </div>
-              </div>
-
-              <div className="input-group">
-                <label className="input-label" style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>Job Name <span style={{ color: 'var(--primary)' }}>*</span></span>
-                  {touched.name && errors.name && (
-                    <span style={{ color: 'var(--red)', fontSize: 11 }}>{errors.name}</span>
-                  )}
-                </label>
-                <input
-                  className={`input ${touched.name && errors.name ? 'input-error' : ''}`}
-                  placeholder="e.g. Q3 2026 Sales Analytics Migration"
-                  value={form.name}
-                  onBlur={() => handleBlur('name')}
-                  onChange={e => setForm({ ...form, name: e.target.value })}
-                />
-              </div>
-            </div>
-
-            {/* MSTR Source Section */}
-            <div style={{ borderTop: '1px solid var(--line)', paddingTop: 20 }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
-                <div className="section-header" style={{ marginBottom: 0 }}>
-                  <div className="section-icon primary">
-                    <Database size={16} />
-                  </div>
-                  <div>
-                    <div className="section-title">MicroStrategy Source Connection</div>
-                    <div className="section-subtitle">Library REST API endpoint & credentials (Required)</div>
-                  </div>
                 </div>
 
-                {/* Connection Status Pill */}
-                <div className={`connection-status ${validationState}`}>
-                  <span className={`connection-dot ${validationState === 'validating' ? 'pulse' : ''}`} />
-                  <span>
-                    {validationState === 'validating' && 'Verifying...'}
-                    {validationState === 'connected' && 'Connected & Verified'}
-                    {validationState === 'failed' && 'Verification Failed'}
-                    {validationState === 'idle' && 'Unverified'}
-                  </span>
-                </div>
-              </div>
-
-              <div style={{ display: 'grid', gap: 14 }}>
                 <div className="input-group">
                   <label className="input-label" style={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <span>Library REST API URL <span style={{ color: 'var(--primary)' }}>*</span></span>
-                    {touched.mstr_base_url && errors.mstr_base_url && (
-                      <span style={{ color: 'var(--red)', fontSize: 11 }}>{errors.mstr_base_url}</span>
+                    <span>Job Name <span style={{ color: 'var(--primary)' }}>*</span></span>
+                    {touched.name && errors.name && (
+                      <span style={{ color: 'var(--red)', fontSize: 11 }}>{errors.name}</span>
                     )}
                   </label>
-                  <div style={{ position: 'relative' }}>
+                  <input
+                    className={`input ${touched.name && errors.name ? 'input-error' : ''}`}
+                    placeholder="e.g. Q3 2026 Sales Analytics Migration"
+                    value={form.name}
+                    onBlur={() => handleBlur('name')}
+                    onChange={e => setForm({ ...form, name: e.target.value })}
+                  />
+                </div>
+              </div>
+
+              {/* MSTR Source Section */}
+              <div style={{ borderTop: '1px solid var(--line)', paddingTop: 16 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                  <div className="section-header" style={{ marginBottom: 0 }}>
+                    <div className="section-title">MicroStrategy Source Connection</div>
+                  </div>
+
+                  {/* Connection Status Pill */}
+                  <div className={`connection-status ${validationState}`}>
+                    <span className={`connection-dot ${validationState === 'validating' ? 'pulse' : ''}`} />
+                    <span>
+                      {validationState === 'validating' && 'Verifying...'}
+                      {validationState === 'connected' && 'Connected & Verified'}
+                      {validationState === 'failed' && 'Verification Failed'}
+                      {validationState === 'idle' && 'Unverified'}
+                    </span>
+                  </div>
+                </div>
+
+                <div style={{ display: 'grid', gap: 12 }}>
+                  <div className="input-group">
+                    <label className="input-label" style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span>Library REST API URL <span style={{ color: 'var(--primary)' }}>*</span></span>
+                      {touched.mstr_base_url && errors.mstr_base_url && (
+                        <span style={{ color: 'var(--red)', fontSize: 11 }}>{errors.mstr_base_url}</span>
+                      )}
+                    </label>
                     <input
                       className={`input ${touched.mstr_base_url && errors.mstr_base_url ? 'input-error' : ''}`}
                       placeholder="https://mstr.company.com/MicroStrategyLibrary"
@@ -333,188 +320,183 @@ export default function NewJobPage() {
                       onChange={e => handleConnectionParamChange('mstr_base_url', e.target.value)}
                     />
                   </div>
-                </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-                  <div className="input-group">
-                    <label className="input-label" style={{ display: 'flex', justifyContent: 'space-between' }}>
-                      <span>MSTR Username <span style={{ color: 'var(--primary)' }}>*</span></span>
-                      {touched.mstr_username && errors.mstr_username && (
-                        <span style={{ color: 'var(--red)', fontSize: 11 }}>{errors.mstr_username}</span>
-                      )}
-                    </label>
-                    <input
-                      className={`input ${touched.mstr_username && errors.mstr_username ? 'input-error' : ''}`}
-                      placeholder="e.g. administrator"
-                      value={form.mstr_username}
-                      onBlur={() => handleBlur('mstr_username')}
-                      onChange={e => handleConnectionParamChange('mstr_username', e.target.value)}
-                    />
-                  </div>
-                  <div className="input-group">
-                    <label className="input-label" style={{ display: 'flex', justifyContent: 'space-between' }}>
-                      <span>MSTR Password <span style={{ color: 'var(--primary)' }}>*</span></span>
-                      {touched.mstr_password && errors.mstr_password && (
-                        <span style={{ color: 'var(--red)', fontSize: 11 }}>{errors.mstr_password}</span>
-                      )}
-                    </label>
-                    <input
-                      className={`input ${touched.mstr_password && errors.mstr_password ? 'input-error' : ''}`}
-                      type="password"
-                      placeholder="••••••••••••"
-                      value={form.mstr_password}
-                      onBlur={() => handleBlur('mstr_password')}
-                      onChange={e => handleConnectionParamChange('mstr_password', e.target.value)}
-                    />
-                  </div>
-                </div>
-
-                <div className="input-group">
-                  <label className="input-label" style={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <span>MSTR Project ID (GUID)</span>
-                    {touched.mstr_project_id && errors.mstr_project_id && (
-                      <span style={{ color: 'var(--red)', fontSize: 11 }}>{errors.mstr_project_id}</span>
-                    )}
-                  </label>
-                  <input
-                    className={`input ${touched.mstr_project_id && errors.mstr_project_id ? 'input-error' : ''}`}
-                    style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}
-                    placeholder="B7CA92F04B9FAE8D941C3E9B7E0CD754"
-                    value={form.mstr_project_id}
-                    onBlur={() => handleBlur('mstr_project_id')}
-                    onChange={e => handleConnectionParamChange('mstr_project_id', e.target.value)}
-                  />
-                  {validationResult?.projects && validationResult.projects.length > 0 && (
-                    <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
-                      <span style={{ fontSize: 11, color: 'var(--ink-2)' }}>
-                        Available Projects on Server ({validationResult.projects.length}):
-                      </span>
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                        {validationResult.projects.map(p => (
-                          <button
-                            key={p.id}
-                            type="button"
-                            className={`badge ${form.mstr_project_id === p.id ? 'badge-primary' : 'badge-neutral'}`}
-                            style={{ cursor: 'pointer', border: '1px solid var(--line)', padding: '4px 8px' }}
-                            onClick={() => handleConnectionParamChange('mstr_project_id', p.id)}
-                            title={`ID: ${p.id}${p.description ? ' - ' + p.description : ''}`}
-                          >
-                            {p.name} {p.id === form.mstr_project_id && '✓'}
-                          </button>
-                        ))}
-                      </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                    <div className="input-group">
+                      <label className="input-label" style={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <span>MSTR Username <span style={{ color: 'var(--primary)' }}>*</span></span>
+                        {touched.mstr_username && errors.mstr_username && (
+                          <span style={{ color: 'var(--red)', fontSize: 11 }}>{errors.mstr_username}</span>
+                        )}
+                      </label>
+                      <input
+                        className={`input ${touched.mstr_username && errors.mstr_username ? 'input-error' : ''}`}
+                        placeholder="e.g. administrator"
+                        value={form.mstr_username}
+                        onBlur={() => handleBlur('mstr_username')}
+                        onChange={e => handleConnectionParamChange('mstr_username', e.target.value)}
+                      />
                     </div>
-                  )}
+                    <div className="input-group">
+                      <label className="input-label" style={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <span>MSTR Password <span style={{ color: 'var(--primary)' }}>*</span></span>
+                        {touched.mstr_password && errors.mstr_password && (
+                          <span style={{ color: 'var(--red)', fontSize: 11 }}>{errors.mstr_password}</span>
+                        )}
+                      </label>
+                      <input
+                        className={`input ${touched.mstr_password && errors.mstr_password ? 'input-error' : ''}`}
+                        type="password"
+                        placeholder="••••••••••••"
+                        value={form.mstr_password}
+                        onBlur={() => handleBlur('mstr_password')}
+                        onChange={e => handleConnectionParamChange('mstr_password', e.target.value)}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="input-group">
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                      <label className="input-label" style={{ marginBottom: 0 }}>
+                        <span>MSTR Project ID (GUID)</span>
+                        {touched.mstr_project_id && errors.mstr_project_id && (
+                          <span style={{ color: 'var(--red)', fontSize: 11, marginLeft: 8 }}>{errors.mstr_project_id}</span>
+                        )}
+                      </label>
+
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-xs"
+                        disabled={validationState === 'validating' || !canTestConnection}
+                        onClick={() => handleValidateConnection(false)}
+                        style={{ padding: '2px 8px', fontSize: 11, display: 'inline-flex', alignItems: 'center', gap: 4 }}
+                        title={!canTestConnection ? 'Enter URL, Username & Password to fetch projects' : 'Fetch available projects from server'}
+                      >
+                        <RefreshCw size={11} className={validationState === 'validating' ? 'spinner' : ''} />
+                        {validationState === 'validating' ? 'Fetching...' : 'Fetch Projects'}
+                      </button>
+                    </div>
+
+                    <input
+                      className={`input ${touched.mstr_project_id && errors.mstr_project_id ? 'input-error' : ''}`}
+                      style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}
+                      placeholder="B7CA92F04B9FAE8D941C3E9B7E0CD754"
+                      value={form.mstr_project_id}
+                      onBlur={() => handleBlur('mstr_project_id')}
+                      onChange={e => handleConnectionParamChange('mstr_project_id', e.target.value)}
+                    />
+
+                    {validationResult?.projects && validationResult.projects.length > 0 && (
+                      <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                        <span style={{ fontSize: 11, color: 'var(--ink-2)' }}>
+                          Available Projects on Server ({validationResult.projects.length}):
+                        </span>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                          {validationResult.projects.map(p => (
+                            <button
+                              key={p.id}
+                              type="button"
+                              className={`badge ${form.mstr_project_id === p.id ? 'badge-primary' : 'badge-neutral'}`}
+                              style={{ cursor: 'pointer', border: '1px solid var(--line)', padding: '4px 8px' }}
+                              onClick={() => handleConnectionParamChange('mstr_project_id', p.id)}
+                              title={`ID: ${p.id}${p.description ? ' - ' + p.description : ''}`}
+                            >
+                              {p.name} {p.id === form.mstr_project_id && '✓'}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
-
-              {/* Validation Result Banners */}
-              <AnimatePresence>
-                {validationState === 'connected' && validationResult && (
-                  <motion.div
-                    initial={{ opacity: 0, height: 0 }}
-                    animate={{ opacity: 1, height: 'auto' }}
-                    exit={{ opacity: 0, height: 0 }}
-                    style={{ marginTop: 14 }}
-                  >
-                    <div className="inline-banner success">
-                      <CheckCircle2 size={18} className="inline-banner-icon" />
-                      <div>
-                        <strong>Connection Authenticated Successfully!</strong>
-                        <div style={{ fontSize: 12, marginTop: 2, opacity: 0.9 }}>
-                          Project: <code>{validationResult.project_name || form.mstr_project_id}</code>
-                          {validationResult.server_version && ` • Server Version: ${validationResult.server_version}`}
-                        </div>
-                      </div>
-                    </div>
-                  </motion.div>
-                )}
-
-                {validationState === 'failed' && (
-                  <motion.div
-                    initial={{ opacity: 0, height: 0 }}
-                    animate={{ opacity: 1, height: 'auto' }}
-                    exit={{ opacity: 0, height: 0 }}
-                    style={{ marginTop: 14 }}
-                  >
-                    <div className="inline-banner error">
-                      <AlertTriangle size={18} className="inline-banner-icon" />
-                      <div style={{ flex: 1 }}>
-                        <strong>Connection Validation Failed</strong>
-                        <div style={{ fontSize: 12, marginTop: 2, opacity: 0.9 }}>
-                          {apiError || 'Could not connect to MSTR Library REST API. Please check server URL, username, and password.'}
-                        </div>
-                        <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
-                          <label style={{ fontSize: 11, display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
-                            <input
-                              type="checkbox"
-                              checked={devModeBypass}
-                              onChange={e => setDevModeBypass(e.target.checked)}
-                              style={{ accentColor: 'var(--primary)' }}
-                            />
-                            <span>Bypass validation for Offline / Dev Mode Testing</span>
-                          </label>
-                        </div>
-                      </div>
-                    </div>
-                  </motion.div>
-                )}
-              </AnimatePresence>
             </div>
 
-            {/* Tableau Target Section — OPTIONAL */}
-            <div style={{ borderTop: '1px solid var(--line)', paddingTop: 20 }}>
-              <div className="section-header">
-                <div className="section-icon blue">
-                  <Server size={16} />
-                </div>
-                <div style={{ flex: 1 }}>
+            {/* ═══ RIGHT COLUMN: Tableau Target & Live Validation Feedback ═══ */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+              {/* Tableau Target Section — OPTIONAL */}
+              <div>
+                <div className="section-header" style={{ marginBottom: 10 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span className="section-title">Tableau Target Server</span>
+                    <span className="section-title">Tableau Target Destination</span>
                     <span className={`badge ${hasTableauTarget ? 'badge-success' : 'badge-neutral'}`}>
                       {hasTableauTarget ? 'Connected' : 'Optional (Download-Only)'}
                     </span>
                   </div>
-                  <div className="section-subtitle">Leave blank to generate packaged .twbx / .hyper files for download</div>
-                </div>
-              </div>
-
-              <div style={{ display: 'grid', gap: 14 }}>
-                <div className="input-group">
-                  <label className="input-label">Tableau Server / Cloud URL</label>
-                  <input
-                    className="input"
-                    placeholder="https://tableau.company.com"
-                    value={form.tableau_server_url}
-                    onChange={e => setForm({ ...form, tableau_server_url: e.target.value })}
-                  />
                 </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                <div style={{ display: 'grid', gap: 12 }}>
                   <div className="input-group">
-                    <label className="input-label">Site ID</label>
+                    <label className="input-label">Tableau Server / Cloud URL</label>
                     <input
                       className="input"
-                      placeholder="default"
-                      value={form.tableau_site_id}
-                      onChange={e => setForm({ ...form, tableau_site_id: e.target.value })}
+                      placeholder="https://tableau.company.com"
+                      value={form.tableau_server_url}
+                      onChange={e => setForm({ ...form, tableau_server_url: e.target.value })}
                     />
                   </div>
-                  <div className="input-group">
-                    <label className="input-label">Target Project</label>
-                    <input
-                      className="input"
-                      placeholder="Migrated Dashboards"
-                      value={form.tableau_target_project}
-                      onChange={e => setForm({ ...form, tableau_target_project: e.target.value })}
-                    />
+
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                    <div className="input-group">
+                      <label className="input-label">Site ID</label>
+                      <input
+                        className="input"
+                        placeholder="default"
+                        value={form.tableau_site_id}
+                        onChange={e => setForm({ ...form, tableau_site_id: e.target.value })}
+                      />
+                    </div>
+                    <div className="input-group">
+                      <label className="input-label">Target Project</label>
+                      <input
+                        className="input"
+                        placeholder="Migrated Dashboards"
+                        value={form.tableau_target_project}
+                        onChange={e => setForm({ ...form, tableau_target_project: e.target.value })}
+                      />
+                    </div>
                   </div>
                 </div>
               </div>
             </div>
+          </div>
 
-            {/* Action Bar */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: 8 }}>
+          {/* Action Bar */}
+          <div style={{ marginTop: 20, paddingTop: 16, borderTop: '1px solid var(--line)' }}>
+            <AnimatePresence>
+
+              {validationState === 'failed' && (
+                <motion.div
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: 'auto' }}
+                  exit={{ opacity: 0, height: 0 }}
+                  style={{ marginBottom: 14 }}
+                >
+                  <div className="inline-banner error">
+                    <AlertTriangle size={18} className="inline-banner-icon" />
+                    <div style={{ flex: 1 }}>
+                      <strong>Connection Validation Failed</strong>
+                      <div style={{ fontSize: 12, marginTop: 2, opacity: 0.9 }}>
+                        {apiError || 'Could not connect to MSTR Library REST API. Please check server URL, username, and password.'}
+                      </div>
+                      <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <label style={{ fontSize: 11, display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                          <input
+                            type="checkbox"
+                            checked={devModeBypass}
+                            onChange={e => setDevModeBypass(e.target.checked)}
+                            style={{ accentColor: 'var(--primary)' }}
+                          />
+                          <span>Bypass validation for Offline / Dev Mode Testing</span>
+                        </label>
+                      </div>
+                    </div>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <button
                 type="button"
                 className="btn btn-secondary"
@@ -570,19 +552,9 @@ export default function NewJobPage() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.4, ease: [0.23, 1, 0.32, 1] }}
         >
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20 }}>
-            <div>
-              <div className="section-header" style={{ marginBottom: 4 }}>
-                <div className="section-icon primary">
-                  <Search size={16} />
-                </div>
-                <div>
-                  <div className="section-title">Dossier Estate Discovery</div>
-                  <div className="section-subtitle">
-                    Select specific dossiers to migrate, or migrate all discovered items
-                  </div>
-                </div>
-              </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+            <div className="section-header" style={{ marginBottom: 0 }}>
+              <div className="section-title">Dossier Estate Discovery</div>
             </div>
 
             <button
@@ -767,98 +739,36 @@ export default function NewJobPage() {
             </div>
           )}
 
-          <div style={{ display: 'flex', justifyContent: 'space-between', paddingTop: 8 }}>
+          {apiError && (
+            <div className="inline-banner error" style={{ marginBottom: 16 }}>
+              <AlertTriangle size={16} className="inline-banner-icon" />
+              <span style={{ fontSize: 12 }}>{apiError}</span>
+            </div>
+          )}
+
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: 8 }}>
             <button className="btn btn-ghost" onClick={() => setStep(0)}>
               <ArrowLeft size={14} /> Back to Connection
             </button>
-            <button className="btn btn-primary" onClick={() => setStep(2)}>
-              Proceed to Configure <ChevronRight size={14} />
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={handleSubmit}
+              disabled={loading || !isStep0Valid}
+              style={{ minWidth: 160 }}
+            >
+              {loading ? (
+                <>
+                  <span className="spinner sm white" />
+                  Initiating Pipeline...
+                </>
+              ) : (
+                <>
+                  <Rocket size={14} />
+                  Start Migration
+                </>
+              )}
             </button>
-          </div>
-        </motion.div>
-      )}
-
-      {/* ── Step 3: Configure & Launch ──────────────── */}
-      {step === 2 && (
-        <motion.div
-          className="card card-pad"
-          initial={{ opacity: 0, y: 10 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.4, ease: [0.23, 1, 0.32, 1] }}
-        >
-          <div style={{ display: 'grid', gap: 24, maxWidth: 580 }}>
-            <div className="section-header" style={{ marginBottom: 0 }}>
-              <div className="section-icon primary">
-                <Sliders size={16} />
-              </div>
-              <div>
-                <div className="section-title">Pipeline Execution Settings</div>
-                <div className="section-subtitle">Automated validation gates & deployment safety controls</div>
-              </div>
-            </div>
-
-            {/* Scope Summary */}
-            <div style={{
-              background: 'var(--field)',
-              borderRadius: 'var(--radius-md)',
-              padding: '14px 16px',
-              fontSize: 12,
-              display: 'grid',
-              gap: 6
-            }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span style={{ color: 'var(--ink-3)' }}>Source URL:</span>
-                <strong style={{ color: 'var(--ink)' }}>{form.mstr_base_url}</strong>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span style={{ color: 'var(--ink-3)' }}>Target:</span>
-                <strong style={{ color: 'var(--ink)' }}>
-                  {form.tableau_server_url ? form.tableau_server_url : 'Download Packaged Artifacts (.twbx/.hyper)'}
-                </strong>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span style={{ color: 'var(--ink-3)' }}>Migration Scope:</span>
-                <strong style={{ color: 'var(--primary)' }}>
-                  {selectedDossierIds.length > 0
-                    ? `${selectedDossierIds.length} Selected Dossiers`
-                    : 'Full Estate (All Dossiers & Objects)'}
-                </strong>
-              </div>
-            </div>
-
-
-
-            {apiError && (
-              <div className="inline-banner error">
-                <AlertTriangle size={16} className="inline-banner-icon" />
-                <span style={{ fontSize: 12 }}>{apiError}</span>
-              </div>
-            )}
-
-            <div style={{ display: 'flex', justifyContent: 'space-between', paddingTop: 8 }}>
-              <button className="btn btn-ghost" onClick={() => setStep(1)}>
-                <ArrowLeft size={14} /> Back
-              </button>
-              <button
-                type="button"
-                className="btn btn-primary"
-                onClick={handleSubmit}
-                disabled={loading || !isStep0Valid}
-                style={{ minWidth: 160 }}
-              >
-                {loading ? (
-                  <>
-                    <span className="spinner sm white" />
-                    Initiating Pipeline...
-                  </>
-                ) : (
-                  <>
-                    <Rocket size={14} />
-                    Start Migration
-                  </>
-                )}
-              </button>
-            </div>
           </div>
         </motion.div>
       )}
