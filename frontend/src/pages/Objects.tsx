@@ -32,10 +32,12 @@ interface WorksheetVisual {
 interface CalcField {
   name: string;
   caption: string;
-  formula: string;
+  mstrFormula: string;
+  tableauCalc?: string;
   return_type: string;
   type: string;
   dependencies: string[];
+  definitionChain?: Array<{ name: string; formula: string }>;
 }
 
 export default function Objects() {
@@ -81,8 +83,8 @@ export default function Objects() {
     const calc = (m.tableau_calc || '').trim();
     const expr = (m.expression_text || '').trim();
     if (!expr || expr === '—' || expr === '-') {
-      const calcMatch = calc.match(/^(?:SUM|AVG|COUNT|MIN|MAX)\(\[([^\]]+)\]\)$/i);
-      if (calcMatch && calcMatch[1].trim().toLowerCase() === m.name.trim().toLowerCase()) {
+      const calcMatch = calc.match(/^(?:SUM|AVG|COUNT|COUNTD|MIN|MAX|MEDIAN|STDEV)\(\[([^\]]+)\]\)$/i);
+      if (calcMatch || !calc) {
         return true;
       }
     }
@@ -98,12 +100,14 @@ export default function Objects() {
     if (dossier?.mstr_definition && typeof dossier.mstr_definition === 'object') {
       const defn = dossier.mstr_definition as any;
       let cnt = 0;
-      for (const ch of defn.chapters || []) {
-        cnt += (ch.pages || []).length || 1;
+      if (defn.chapters) {
+        defn.chapters.forEach((ch: any) => {
+          cnt += (ch.pages || []).length;
+        });
       }
       if (cnt > 0) return cnt;
     }
-    return 3;
+    return 1;
   }, [vizPlanDashboards, dossiers]);
 
   const uniqueAttributes = useMemo(() => {
@@ -212,11 +216,13 @@ export default function Objects() {
 
     return derivedMetrics.map((m) => {
       const isRatio = m.name.toLowerCase().includes('percent') || m.name.toLowerCase().includes('ratio') || m.tableau_calc?.includes('NULLIF');
-      const formula = m.tableau_calc || m.expression_text || '(Translation pending)';
+      const mstrFormula = (m.expression_text || '').trim() || (m.definition_chain && m.definition_chain.length > 0 ? m.definition_chain[m.definition_chain.length - 1].formula : '') || '— no MSTR expression stored';
+      const tableauCalc = (m.tableau_calc || '').trim();
 
       const deps: string[] = [];
-      if (formula !== '(Translation pending)') {
-        const matches = formula.match(/\[([^\]]+)\]/g);
+      const formulaForDeps = m.expression_text || m.tableau_calc || '';
+      if (formulaForDeps) {
+        const matches = formulaForDeps.match(/\[([^\]]+)\]/g);
         if (matches) {
           matches.forEach(match => {
             const cleaned = match.replace(/[[\]]/g, '');
@@ -229,10 +235,12 @@ export default function Objects() {
       return {
         name: m.name,
         caption: m.name,
-        formula,
+        mstrFormula,
+        tableauCalc: tableauCalc || undefined,
         return_type: isRatio ? 'REAL' : 'INTEGER',
         type: isRatio ? 'RATIO / LOD' : 'CALCULATED',
         dependencies: deps,
+        definitionChain: Array.isArray(m.definition_chain) ? m.definition_chain : undefined,
       };
     });
   }, [derivedMetrics]);
@@ -505,8 +513,26 @@ export default function Objects() {
                   </div>
                   {isExpanded && (
                     <div style={{ marginTop: '10px', paddingTop: '10px', borderTop: '1px solid var(--line)', display: 'flex', flexDirection: 'column', gap: '8px', minWidth: 0 }} onClick={(e) => e.stopPropagation()}>
-                      <span style={specBlockLabel}>Compiled Formula</span>
-                      <pre style={formulaBlock}>{cf.formula}</pre>
+                      <div>
+                        <span style={specBlockLabel}>MicroStrategy Formula</span>
+                        <pre style={formulaBlock}>{cf.mstrFormula}</pre>
+                      </div>
+
+                      {cf.definitionChain && cf.definitionChain.length > 0 && (
+                        <div>
+                          <span style={specBlockLabel}>MSTR Definition Lineage</span>
+                          <div style={{ marginTop: '4px', display: 'flex', flexDirection: 'column', gap: '3px', fontSize: '0.75rem', fontFamily: 'var(--font-mono)' }}>
+                            {cf.definitionChain.map((d, di) => (
+                              <div key={di} style={{ color: 'var(--ink-2)', display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+                                <span style={{ color: 'var(--ink-3)' }}>{di === 0 ? '└─' : '  ├─'}</span>
+                                <span style={{ fontWeight: 700, color: 'var(--ink)' }}>{d.name}</span>
+                                <span style={{ color: 'var(--ink-3)' }}>≔</span>
+                                <span style={{ color: '#9B51E0' }}>{d.formula}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>

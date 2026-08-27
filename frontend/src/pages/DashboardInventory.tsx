@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { api } from '../api';
 import { EmptyState } from '../components/ui/EmptyState';
+import { TableauIcon } from '../components/icons/TableauIcon';
 import styles from './DashboardInventory.module.css';
 
 export interface MstrVisualDef {
@@ -350,7 +351,7 @@ export default function DashboardInventory() {
                       <div className={styles.visualSideColumn}>
                         <div className={styles.columnHeader}>
                           <span className={`${styles.columnHeaderTitle} ${styles.tableauAccent}`}>
-                            <BarChart3 size={13} /> Target Tableau Worksheet (VQL / XML)
+                            <TableauIcon size={14} /> Target Tableau Worksheet (VQL / XML)
                           </span>
                         </div>
 

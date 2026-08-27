@@ -293,15 +293,6 @@ async def list_objects(
             if not res.translation_method:
                 res.translation_method = "AST Expression Engine"
 
-        # Initial un-migrated review state for High Fraud Claims until user explicitly validates it
-        if (res.name or "").strip().lower() == "high fraud claims":
-            if o.status != "valid":
-                res.tableau_calc = "IF(([Fraud Score]@ID >= 70), 1, 0)"
-                res.status = "requires_review"
-                res.confidence = 0.40
-                res.translation_method = "Uncompiled MicroStrategy Dialect"
-                res.expression_text = "Sum<UseLookupForAttributes=False >([High Fraud Flag]){~+}"
-
         resp_objects.append(res)
 
     return ObjectListResponse(
@@ -352,14 +343,5 @@ async def get_object(job_id: str, object_id: str, db: Session = Depends(get_db))
                     res.translation_method = "Universal AST Compiler"
             except Exception:
                 pass
-
-    # Initial un-migrated review state for High Fraud Claims until user explicitly validates it
-    if (res.name or "").strip().lower() == "high fraud claims":
-        if obj.status != "valid":
-            res.tableau_calc = "IF(([Fraud Score]@ID >= 70), 1, 0)"
-            res.status = "requires_review"
-            res.confidence = 0.40
-            res.translation_method = "Uncompiled MicroStrategy Dialect"
-            res.expression_text = "Sum<UseLookupForAttributes=False >([High Fraud Flag]){~+}"
 
     return res

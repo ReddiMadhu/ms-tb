@@ -22,6 +22,7 @@ import {
   CheckCheck,
 } from 'lucide-react';
 import { api, type MigrationObject, type CFReemitResponse } from '../api';
+import { TableauIcon } from '../components/icons/TableauIcon';
 import styles from './LogicExplorer.module.css';
 
 interface CalculationItem {
@@ -156,58 +157,6 @@ export default function LogicExplorer() {
           };
         });
 
-      // Ensure High Fraud Claims showcase object is present with initial "Requires Review" status
-      const claimsIndex = dynamicCalcs.findIndex(
-        (c) => c.name.trim().toLowerCase() === 'high fraud claims' || c.mstrId === 'M-HF-DEMO' || c.id === 'demo-high-fraud-claims'
-      );
-
-      const initialFraudItem: CalculationItem = {
-        id: 'demo-high-fraud-claims',
-        name: 'High Fraud Claims',
-        category: 'CONDITIONAL',
-        formulaType: 'Conditional Flag Aggregate',
-        sourceFormula: 'Sum<UseLookupForAttributes=False >([High Fraud Flag]){~+}',
-        targetCalc: 'IF(([Fraud Score]@ID >= 70), 1, 0)',
-        method: 'Uncompiled MicroStrategy Dialect',
-        confidence: 0.40,
-        validationStatus: 'WARNING',
-        datasource: 'MicroStrategy Schema',
-        explanation: "⚠️ Formula contains raw MicroStrategy attribute form '@ID' and comma-separated IF(cond, 1, 0) syntax which is invalid in Tableau. Requires review to convert to: SUM(IF ([Fraud Score] >= 70) THEN 1 ELSE 0 END).",
-        hasSource: true,
-        hasTarget: true,
-        mstrId: 'M-HF-DEMO',
-        definitionChain: [
-          { name: 'High Fraud Flag', formula: 'IF(([Fraud Score]@ID >= 70), 1, 0)' },
-          { name: 'High Fraud Claims', formula: 'Sum<UseLookupForAttributes=False >([High Fraud Flag]){~+}' }
-        ]
-      };
-
-      if (claimsIndex >= 0) {
-        if (dynamicCalcs[claimsIndex].targetCalc !== 'SUM(IF ([Fraud Score] >= 70) THEN 1 ELSE 0 END)' && dynamicCalcs[claimsIndex].validationStatus !== 'VALID') {
-          dynamicCalcs[claimsIndex].targetCalc = 'IF(([Fraud Score]@ID >= 70), 1, 0)';
-          dynamicCalcs[claimsIndex].validationStatus = 'WARNING';
-          dynamicCalcs[claimsIndex].confidence = 0.40;
-          dynamicCalcs[claimsIndex].sourceFormula = 'Sum<UseLookupForAttributes=False >([High Fraud Flag]){~+}';
-          dynamicCalcs[claimsIndex].explanation = "⚠️ Formula contains raw MicroStrategy attribute form '@ID' and comma-separated IF(cond, 1, 0) syntax which is invalid in Tableau. Requires review to convert to: SUM(IF ([Fraud Score] >= 70) THEN 1 ELSE 0 END).";
-        }
-      } else {
-        dynamicCalcs.unshift(initialFraudItem);
-      }
-
-      // Preserve High Fraud Rate as a clean, valid ratio calculation
-      const rateIndex = dynamicCalcs.findIndex(
-        (c) => c.name.trim().toLowerCase() === 'high fraud rate'
-      );
-      if (rateIndex >= 0) {
-        if (dynamicCalcs[rateIndex].targetCalc === 'IF(([Fraud Score]@ID >= 70), 1, 0)' || !dynamicCalcs[rateIndex].targetCalc) {
-          dynamicCalcs[rateIndex].targetCalc = 'IIF([Total_Claims] = 0, NULL, [High Fraud Claims] / [Total_Claims])';
-          dynamicCalcs[rateIndex].sourceFormula = '[High Fraud Claims] / Total_Claims';
-          dynamicCalcs[rateIndex].validationStatus = 'VALID';
-          dynamicCalcs[rateIndex].confidence = 0.99;
-          dynamicCalcs[rateIndex].explanation = 'Ratio of high fraud claims to total claims guarded against zero division.';
-        }
-      }
-
       // Alias tagging
       const byExpr = new Map<string, string>();
       for (const c of dynamicCalcs) {
@@ -219,44 +168,14 @@ export default function LogicExplorer() {
         if (canonical && canonical !== c.name) c.aliasOf = canonical;
       }
 
-      // Move High Fraud Claims to top of the list so it is immediately prominent and expanded
-      const finalClaimsIdx = dynamicCalcs.findIndex(
-        (c) => c.name.trim().toLowerCase() === 'high fraud claims'
-      );
-      if (finalClaimsIdx > 0) {
-        const [claimsObj] = dynamicCalcs.splice(finalClaimsIdx, 1);
-        dynamicCalcs.unshift(claimsObj);
-      }
-
       if (dynamicCalcs.length > 0) {
         setCalculations(dynamicCalcs);
-        setExpandedIds(new Set([dynamicCalcs[0].id]));
+        setExpandedIds((prev) => (prev.size > 0 ? prev : new Set([dynamicCalcs[0].id])));
+      } else {
+        setCalculations([]);
       }
     } catch {
-      // Fallback showcase object starting in Incorrect / Requires Review state
-      setCalculations([
-        {
-          id: 'demo-high-fraud-claims',
-          name: 'High Fraud Claims',
-          category: 'CONDITIONAL',
-          formulaType: 'Conditional Flag Aggregate',
-          sourceFormula: 'Sum<UseLookupForAttributes=False >([High Fraud Flag]){~+}',
-          targetCalc: 'IF(([Fraud Score]@ID >= 70), 1, 0)',
-          method: 'Uncompiled MicroStrategy Dialect',
-          confidence: 0.40,
-          validationStatus: 'WARNING',
-          datasource: 'MicroStrategy Schema',
-          explanation: "⚠️ Formula contains raw MicroStrategy attribute form '@ID' and comma-separated IF(cond, 1, 0) syntax which is invalid in Tableau. Requires review to convert to: SUM(IF ([Fraud Score] >= 70) THEN 1 ELSE 0 END).",
-          hasSource: true,
-          hasTarget: true,
-          mstrId: 'M-HF-DEMO',
-          definitionChain: [
-            { name: 'High Fraud Flag', formula: 'IF(([Fraud Score]@ID >= 70), 1, 0)' },
-            { name: 'High Fraud Claims', formula: 'Sum<UseLookupForAttributes=False >([High Fraud Flag]){~+}' }
-          ]
-        }
-      ]);
-      setExpandedIds(new Set(['demo-high-fraud-claims']));
+      setCalculations([]);
     } finally {
       setIsLoading(false);
     }
@@ -379,7 +298,7 @@ export default function LogicExplorer() {
                   validationStatus: 'VALID',
                   confidence: 0.99,
                   method: 'Universal AST Compiler (Verified & Re-emitted)',
-                  explanation: `Evaluates claim fraud threshold at row-level: expanded MSTR derived attribute [High Fraud Flag] inline. Verified and re-emitted into Tableau Workbook.`,
+                  explanation: `Statically validated and verified formula for [${item.name}]. Re-emitted into Tableau Workbook.`,
                 }
               : c
           )
@@ -427,7 +346,7 @@ export default function LogicExplorer() {
           {
             step: 'Tableau Workbook Re-emission',
             status: 'completed',
-            detail: 'Tableau XML model generated and packaged into .twbx bundle (Fraud_Analysis_Migration.twbx).',
+            detail: `Tableau XML model generated and packaged into .twbx bundle (${item.name.replace(/[^a-zA-Z0-9_-]/g, '_')}_workbook.twbx).`,
           },
           {
             step: 'Static Validation Capability Demonstration',
@@ -438,7 +357,7 @@ export default function LogicExplorer() {
         updated_calc: editingDraft,
         artifact: {
           id: 'art-twbx-latest',
-          file_name: 'Fraud_Analysis_Migration.twbx',
+          file_name: `${item.name.replace(/[^a-zA-Z0-9_-]/g, '_')}_workbook.twbx`,
           size_bytes: 524288,
           download_url: `/api/v1/jobs/${targetJob}/download/art-twbx-latest`,
         },
@@ -462,7 +381,7 @@ export default function LogicExplorer() {
                 validationStatus: 'VALID',
                 confidence: 0.99,
                 method: 'Universal AST Compiler (Verified & Re-emitted)',
-                explanation: `Evaluates claim fraud threshold at row-level: expanded MSTR derived attribute [High Fraud Flag] inline. Verified and re-emitted into Tableau Workbook.`,
+                explanation: `Statically validated and verified formula for [${item.name}]. Re-emitted into Tableau Workbook.`,
               }
             : c
         )
@@ -475,7 +394,7 @@ export default function LogicExplorer() {
 
   const totalCalculations = calculations.length;
   const validCount = calculations.filter((c) => c.validationStatus === 'VALID').length;
-  const compilationRate = totalCalculations > 0 ? Math.round((validCount / totalCalculations) * 100) : 100;
+  const reviewRequiredCount = calculations.filter((c) => c.validationStatus === 'WARNING' || c.validationStatus === 'FAIL').length;
   const lodCount = calculations.filter((c) => c.category === 'LOD').length;
 
   return (
@@ -491,9 +410,9 @@ export default function LogicExplorer() {
           <span className={styles.kpiValue}>{validCount}</span>
         </div>
         <div className={styles.kpiCard}>
-          <span className={styles.kpiLabel}>Logic Conversion Rate</span>
-          <span className={styles.kpiValue} style={{ color: 'var(--green, #22c55e)' }}>
-            {compilationRate}%
+          <span className={styles.kpiLabel}>Human Review Required</span>
+          <span className={styles.kpiValue} style={{ color: reviewRequiredCount > 0 ? 'var(--yellow, #eab308)' : 'var(--green, #22c55e)' }}>
+            {reviewRequiredCount}
           </span>
         </div>
         <div className={styles.kpiCard}>
@@ -548,7 +467,7 @@ export default function LogicExplorer() {
                     )}
                   </div>
                   <div className={styles.cardStatusGroup}>
-                    {/* Edit Action Button — Exclusively for items in Review State (e.g. High Fraud Claims) */}
+                    {/* Edit Action Button — Only for items requiring human review */}
                     {(isWarn || isFail) && (
                       <button
                         type="button"
@@ -645,7 +564,7 @@ export default function LogicExplorer() {
                       <div className={styles.codeColumn}>
                         <div className={styles.codeColumnHeader}>
                           <span className={styles.codeColumnTitleTarget}>
-                            <Code2 size={13} /> Tableau Calculated Field (CF) / LOD Expression
+                            <TableauIcon size={14} /> Tableau Calculated Field (CF) / LOD Expression
                           </span>
                           {item.hasTarget ? (
                             <button
@@ -722,30 +641,15 @@ export default function LogicExplorer() {
                           className={styles.formulaTextarea}
                           value={editingDraft}
                           onChange={(e) => setEditingDraft(e.target.value)}
-                          placeholder="e.g. SUM(IF ([Fraud Score] >= 70) THEN 1 ELSE 0 END)"
+                          placeholder="e.g. SUM(IF [Sales] > 1000 THEN [Profit] ELSE 0 END) or { FIXED [Region] : SUM([Sales]) }"
                           rows={3}
                         />
 
                         <div className={styles.editorFooter}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                             <span className={styles.editorHelp}>
-                              Enter Tableau expression to replace unexpanded calculation:
+                              Enter Tableau expression to update this calculation:
                             </span>
-                            {item.name === 'High Fraud Claims' && editingDraft !== 'SUM(IF ([Fraud Score] >= 70) THEN 1 ELSE 0 END)' && (
-                              <button
-                                type="button"
-                                className={styles.syntaxChip}
-                                style={{
-                                  cursor: 'pointer',
-                                  background: 'var(--primary-tint, rgba(99, 102, 241, 0.15))',
-                                  color: 'var(--primary, #6366f1)',
-                                  border: '1px solid var(--primary, #6366f1)',
-                                }}
-                                onClick={() => setEditingDraft('SUM(IF ([Fraud Score] >= 70) THEN 1 ELSE 0 END)')}
-                              >
-                                💡 Insert Corrected: SUM(IF ([Fraud Score] &gt;= 70) THEN 1 ELSE 0 END)
-                              </button>
-                            )}
                           </div>
                           <div className={styles.editorActions}>
                             <button
@@ -767,16 +671,6 @@ export default function LogicExplorer() {
                             </button>
                           </div>
                         </div>
-                      </div>
-                    )}
-
-                    {item.explanation && (
-                      <div className={styles.explanationFooter}>
-                        <Sparkles size={14} className={styles.sparkleIcon} />
-                        <span>
-                          <strong>Transformation Note: </strong>
-                          {item.explanation}
-                        </span>
                       </div>
                     )}
                   </>

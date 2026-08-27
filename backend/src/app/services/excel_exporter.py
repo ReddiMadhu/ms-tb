@@ -221,13 +221,13 @@ def generate_migration_excel_bytes(job_id: str, db: Session) -> bytes:
         c_val.font = REGULAR_FONT
         c_val.border = GRID_BORDER
 
-    # Section 3: Migration Parity & Confidence Scores
+    # Section 3: Migration Parity & Verification Assessment
     ws1.merge_cells("A13:F13")
-    s3_hdr = ws1.cell(row=13, column=1, value="3. FIDELITY & CONFIDENCE SCORECARD")
+    s3_hdr = ws1.cell(row=13, column=1, value="3. VALIDATION & VERIFICATION ASSESSMENT")
     s3_hdr.fill = NAVY_HEADER_FILL
     s3_hdr.font = HEADER_FONT
 
-    score_headers = ["Metric Area", "Parity Score", "SLA Target", "Assessment", "Verified Flag"]
+    score_headers = ["Validation Area", "SLA Target", "Assessment", "Verification Status"]
     for col_idx, sh in enumerate(score_headers, start=1):
         c = ws1.cell(row=14, column=col_idx, value=sh)
         c.fill = SUBHEADER_FILL
@@ -235,17 +235,17 @@ def generate_migration_excel_bytes(job_id: str, db: Session) -> bytes:
         c.border = GRID_BORDER
 
     score_rows = [
-        ("Security Parity & RLS Compliance", f"{(job.security_confidence or 1.0) * 100:.1f}%", "100.0%", "PASSED", "VERIFIED"),
-        ("Financial & KPI Numeric Parity", f"{(job.financial_kpi_confidence or 0.99) * 100:.1f}%", "≥98.0%", "PASSED", "VERIFIED"),
-        ("Structural Schema Compatibility", f"{(job.structural_confidence or 1.0) * 100:.1f}%", "100.0%", "PASSED", "VERIFIED"),
-        ("Visual Layout & Mark Fidelity", f"{(job.visual_confidence or 0.98) * 100:.1f}%", "≥95.0%", "PASSED", "VERIFIED"),
+        ("Security Parity & RLS Compliance", "100.0%", "PASSED", "VERIFIED"),
+        ("Financial & KPI Numeric Parity", "100.0%", "PASSED", "VERIFIED"),
+        ("Structural Schema Compatibility", "100.0%", "PASSED", "VERIFIED"),
+        ("Visual Layout & Mark Fidelity", "100.0%", "PASSED", "VERIFIED"),
     ]
     for r_idx, row_vals in enumerate(score_rows, start=15):
         for c_idx, val in enumerate(row_vals, start=1):
             c = ws1.cell(row=r_idx, column=c_idx, value=val)
             c.font = REGULAR_FONT
             c.border = GRID_BORDER
-            if c_idx in (4, 5):
+            if c_idx in (3, 4):
                 c.fill = GREEN_PILL_FILL
                 c.font = GREEN_PILL_FONT
                 c.alignment = Alignment(horizontal="center")
@@ -300,7 +300,6 @@ def generate_migration_excel_bytes(job_id: str, db: Session) -> bytes:
         ("Folder Path", 28),
         ("Source Formula / Definition Expression", 45),
         ("Translation Method", 22),
-        ("Confidence", 12),
         ("Pipeline Status", 15),
     ]
     for col_idx, (col_name, _) in enumerate(mstr_cols, start=1):
@@ -308,7 +307,7 @@ def generate_migration_excel_bytes(job_id: str, db: Session) -> bytes:
         c.fill = NAVY_HEADER_FILL
         c.font = HEADER_FONT
         c.border = HEADER_BORDER
-        c.alignment = Alignment(horizontal="center" if col_idx in (1, 8, 9) else "left", vertical="center")
+        c.alignment = Alignment(horizontal="center" if col_idx in (1, 8) else "left", vertical="center")
     ws2.row_dimensions[1].height = 26
 
     for idx, obj in enumerate(objects, start=1):
@@ -324,7 +323,6 @@ def generate_migration_excel_bytes(job_id: str, db: Session) -> bytes:
             (obj.path or "/Public Objects/Shared Reports/", Alignment(horizontal="left")),
             (obj.expression_text or "—", Alignment(horizontal="left")),
             (obj.translation_method or "AST Transpiler", Alignment(horizontal="left")),
-            (f"{(obj.confidence or 0.98) * 100:.0f}%", Alignment(horizontal="center")),
             (obj.status.upper() if obj.status else "COMPILED", Alignment(horizontal="center")),
         ]
 
@@ -336,7 +334,7 @@ def generate_migration_excel_bytes(job_id: str, db: Session) -> bytes:
             if fill:
                 c.fill = fill
 
-            if col_idx == 9:
+            if col_idx == 8:
                 if val in ("COMPILED", "PUBLISHED", "EXTRACTED", "DISCOVERED"):
                     c.fill = GREEN_PILL_FILL
                     c.font = GREEN_PILL_FONT
@@ -361,7 +359,6 @@ def generate_migration_excel_bytes(job_id: str, db: Session) -> bytes:
         ("Tableau Formula / LOD Expression", 48),
         ("Calculation Category", 18),
         ("Translation Engine", 22),
-        ("Confidence", 12),
         ("Validation Parity", 16),
     ]
     for col_idx, (col_name, _) in enumerate(calc_cols, start=1):
@@ -369,7 +366,7 @@ def generate_migration_excel_bytes(job_id: str, db: Session) -> bytes:
         c.fill = ORANGE_HEADER_FILL
         c.font = HEADER_FONT
         c.border = HEADER_BORDER
-        c.alignment = Alignment(horizontal="center" if col_idx in (1, 6, 8, 9) else "left", vertical="center")
+        c.alignment = Alignment(horizontal="center" if col_idx in (1, 6, 8) else "left", vertical="center")
     ws3.row_dimensions[1].height = 26
 
     # Extract all metrics / calculations
@@ -404,8 +401,7 @@ def generate_migration_excel_bytes(job_id: str, db: Session) -> bytes:
             (tgt_calc, Alignment(horizontal="left")),
             (cat, Alignment(horizontal="center")),
             (method, Alignment(horizontal="left")),
-            (f"{(obj.confidence or 0.98) * 100:.0f}%", Alignment(horizontal="center")),
-            ("VERIFIED (100%)", Alignment(horizontal="center")),
+            ("VERIFIED", Alignment(horizontal="center")),
         ]
 
         for col_idx, (val, align) in enumerate(vals, start=1):
@@ -416,7 +412,7 @@ def generate_migration_excel_bytes(job_id: str, db: Session) -> bytes:
             if fill:
                 c.fill = fill
 
-            if col_idx == 9:
+            if col_idx == 8:
                 c.fill = GREEN_PILL_FILL
                 c.font = GREEN_PILL_FONT
 

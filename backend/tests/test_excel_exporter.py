@@ -105,6 +105,14 @@ def test_excel_exporter_generates_all_5_sheets(db_session):
     assert ws3.cell(row=1, column=2).value == "MSTR Metric Name"
     assert ws3.cell(row=1, column=4).value == "Tableau Calculated Field Name"
 
+    # Verify no sheet contains any "Confidence" column header or scorecard
+    for s_name in sheet_names:
+        ws = wb[s_name]
+        for row in ws.iter_rows(values_only=True):
+            for val in row:
+                if val:
+                    assert "confidence" not in str(val).lower(), f"Unexpected 'confidence' found in sheet {s_name}: {val}"
+
 
 def test_excel_export_api_endpoint(client, db_session):
     job = Job(
