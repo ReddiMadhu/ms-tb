@@ -560,15 +560,14 @@ export const api = {
       body: JSON.stringify({ format }),
     }),
 
-  downloadExcelReport: (jobId: string, jobName?: string) => {
-    const url = `/api/v1/jobs/${jobId}/export/excel`;
-    const a = document.createElement('a');
-    a.href = url;
+  downloadExcelReport: async (jobId: string, jobName?: string) => {
     const safeName = (jobName || 'Migration').replace(/[^a-zA-Z0-9_-]/g, '_');
-    a.download = `Migration_Documentation_${safeName}_${jobId.slice(0, 8)}.xlsx`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+    const defaultFilename = `Migration_Documentation_${safeName}_${jobId.slice(0, 8)}.xlsx`;
+    await triggerFileDownload(`/jobs/${jobId}/export/excel`, defaultFilename);
+  },
+
+  downloadArtifact: async (jobId: string, artifactId: string, fileName: string) => {
+    await triggerFileDownload(`/jobs/${jobId}/download/${artifactId}`, fileName);
   },
 
   getPublishStatus: (jobId: string) =>

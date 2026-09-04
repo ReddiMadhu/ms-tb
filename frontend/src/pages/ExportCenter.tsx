@@ -6,6 +6,8 @@ import {
   Database,
   FileCode,
   FolderTree,
+  RefreshCw,
+  AlertCircle,
 } from 'lucide-react';
 import { api, type ArtifactItem, type Job } from '../api';
 import { TableauIcon } from '../components/icons/TableauIcon';
@@ -15,6 +17,8 @@ export default function ExportCenter() {
   const { jobId } = useParams<{ jobId: string }>();
   const [job, setJob] = useState<Job | null>(null);
   const [artifacts, setArtifacts] = useState<ArtifactItem[]>([]);
+  const [downloadingId, setDownloadingId] = useState<string | null>(null);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
 
   const loadExportData = React.useCallback(async () => {
     if (!jobId) return;
@@ -42,6 +46,32 @@ export default function ExportCenter() {
     loadExportData();
   }, [loadExportData]);
 
+  const handleDownloadArtifact = async (art: ArtifactItem) => {
+    if (!jobId) return;
+    setDownloadingId(art.id);
+    setDownloadError(null);
+    try {
+      await api.downloadArtifact(jobId, art.id, art.file_name);
+    } catch (err: any) {
+      setDownloadError(`Failed to download ${art.file_name}: ${err?.message || 'Network error'}`);
+    } finally {
+      setDownloadingId(null);
+    }
+  };
+
+  const handleDownloadExcel = async () => {
+    if (!jobId) return;
+    setDownloadingId('excel');
+    setDownloadError(null);
+    try {
+      await api.downloadExcelReport(jobId, job?.name);
+    } catch (err: any) {
+      setDownloadError(`Failed to download Excel documentation: ${err?.message || 'Server error'}`);
+    } finally {
+      setDownloadingId(null);
+    }
+  };
+
   const totalArtifactsCount = artifacts.length + 1;
 
   return (
@@ -65,6 +95,41 @@ export default function ExportCenter() {
           </span>
         </div>
       </div>
+
+      {/* ── Error Notification ──────────────────────────────────── */}
+      {downloadError && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '10px',
+            padding: '12px 16px',
+            borderRadius: 'var(--radius-md)',
+            background: 'rgba(239, 68, 68, 0.1)',
+            border: '1px solid rgba(239, 68, 68, 0.3)',
+            color: '#ef4444',
+            fontSize: '0.8125rem',
+            marginBottom: '16px',
+          }}
+        >
+          <AlertCircle size={16} style={{ flexShrink: 0 }} />
+          <span style={{ flex: 1 }}>{downloadError}</span>
+          <button
+            type="button"
+            onClick={() => setDownloadError(null)}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: '#ef4444',
+              cursor: 'pointer',
+              fontWeight: 700,
+              fontSize: '0.875rem',
+            }}
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       {/* ── Artifact Cards Grid ───────────────────────────────────── */}
       <div>
@@ -130,14 +195,31 @@ export default function ExportCenter() {
                     {art.size_bytes ? `${Math.round(art.size_bytes / 1024)} KB` : '42 KB'}
                   </span>
 
-                  <a
-                    href={`/api/v1/jobs/${jobId}/download/${art.id}`}
-                    download={art.file_name}
+                  <button
+                    type="button"
+                    onClick={() => handleDownloadArtifact(art)}
+                    disabled={downloadingId !== null}
                     className="btn btn-primary"
-                    style={{ padding: '6px 12px', fontSize: '0.75rem', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '4px' }}
+                    style={{
+                      padding: '6px 12px',
+                      fontSize: '0.75rem',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      cursor: downloadingId !== null ? 'not-allowed' : 'pointer',
+                      opacity: downloadingId !== null && downloadingId !== art.id ? 0.6 : 1,
+                    }}
                   >
-                    <Download size={13} /> Download
-                  </a>
+                    {downloadingId === art.id ? (
+                      <>
+                        <RefreshCw size={13} className="animate-spin" /> Downloading...
+                      </>
+                    ) : (
+                      <>
+                        <Download size={13} /> Download
+                      </>
+                    )}
+                  </button>
                 </div>
               </div>
             );
@@ -207,7 +289,8 @@ export default function ExportCenter() {
 
               <button
                 type="button"
-                onClick={() => jobId && api.downloadExcelReport(jobId, job?.name)}
+                onClick={handleDownloadExcel}
+                disabled={downloadingId !== null}
                 className="btn btn-primary"
                 style={{
                   padding: '6px 12px',
@@ -215,9 +298,19 @@ export default function ExportCenter() {
                   display: 'flex',
                   alignItems: 'center',
                   gap: '4px',
+                  cursor: downloadingId !== null ? 'not-allowed' : 'pointer',
+                  opacity: downloadingId !== null && downloadingId !== 'excel' ? 0.6 : 1,
                 }}
               >
-                <Download size={13} /> Download
+                {downloadingId === 'excel' ? (
+                  <>
+                    <RefreshCw size={13} className="animate-spin" /> Downloading...
+                  </>
+                ) : (
+                  <>
+                    <Download size={13} /> Download
+                  </>
+                )}
               </button>
             </div>
           </div>
