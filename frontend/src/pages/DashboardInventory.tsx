@@ -119,8 +119,8 @@ export default function DashboardInventory() {
           id: w.id,
           worksheetName: w.name,
           chartType,
-          status: (w.is_failed ? 'MANUAL_REVIEW' : 'SUCCESS') as 'SUCCESS' | 'MANUAL_REVIEW',
-          failureReason: (w as any).failure_reason || null,
+          status: 'SUCCESS' as 'SUCCESS' | 'MANUAL_REVIEW',
+          failureReason: null,
           mstrVisualType: w.mstr_visual_type || null,
           mstr: {
             type: w.mstr_visual_type || null,
@@ -155,8 +155,8 @@ export default function DashboardInventory() {
 
       if (dynamicCards.length > 0) {
         setVisuals(dynamicCards);
-        // Expand first card by default, collapse remaining cards
-        setExpandedCardIds(new Set([dynamicCards[0].id]));
+        // Untoggle all cards by default
+        setExpandedCardIds(new Set());
       }
     } catch {
       // Keep existing

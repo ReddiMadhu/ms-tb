@@ -170,7 +170,7 @@ export default function LogicExplorer() {
 
       if (dynamicCalcs.length > 0) {
         setCalculations(dynamicCalcs);
-        setExpandedIds((prev) => (prev.size > 0 ? prev : new Set([dynamicCalcs[0].id])));
+        setExpandedIds((prev) => (prev.size > 0 ? prev : new Set()));
       } else {
         setCalculations([]);
       }
@@ -395,7 +395,12 @@ export default function LogicExplorer() {
   const totalCalculations = calculations.length;
   const validCount = calculations.filter((c) => c.validationStatus === 'VALID').length;
   const reviewRequiredCount = calculations.filter((c) => c.validationStatus === 'WARNING' || c.validationStatus === 'FAIL').length;
-  const lodCount = calculations.filter((c) => c.category === 'LOD').length;
+  const complexFormulaCount = calculations.filter((c) => {
+    const expr = (c.targetCalc || '') + ' ' + (c.sourceFormula || '');
+    const bracketMatches = expr.match(/\[[^\]]+\]/g) || [];
+    const hasMultipleMetrics = bracketMatches.length >= 2;
+    return c.category === 'LOD' || c.category === 'CONDITIONAL' || c.category === 'TABLE_CALC' || hasMultipleMetrics;
+  }).length;
 
   return (
     <div className={styles.container}>
@@ -416,8 +421,8 @@ export default function LogicExplorer() {
           </span>
         </div>
         <div className={styles.kpiCard}>
-          <span className={styles.kpiLabel}>LOD / Dimty Expressions</span>
-          <span className={styles.kpiValue}>{lodCount}</span>
+          <span className={styles.kpiLabel}>Complex Formulas</span>
+          <span className={styles.kpiValue}>{complexFormulaCount}</span>
         </div>
       </div>
 

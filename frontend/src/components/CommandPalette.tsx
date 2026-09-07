@@ -166,7 +166,7 @@ export const CommandPalette: React.FC = () => {
         },
         {
           id: 'job-exports',
-          label: 'Publish & Export Center',
+          label: 'Export Center',
           category: 'Current Job',
           icon: <Download size={16} />,
           action: () => {

@@ -29,12 +29,17 @@ export default function JobDetailPage() {
       const jobData = await api.getJob(jobId);
       setJob(jobData);
 
-      // Keep stepper focused on the currently executing/loading phase while job is running
+      // Keep stepper focused on the currently executing phase while job is running.
+      // After completion, default to Node 1 (EXTRACTION_CATALOG / Dashboard Intelligence) unless user clicked another phase.
       const currentStage = jobData.progress?.current_stage || jobData.current_stage;
       if (currentStage) {
         const phase = getPhaseForStage(currentStage);
-        if (phase && (isJobRunning(jobData.status) || !userSelectedPhaseRef.current)) {
-          setSelectedPhaseId(phase.id);
+        if (!userSelectedPhaseRef.current) {
+          if (isJobRunning(jobData.status) && phase) {
+            setSelectedPhaseId(phase.id);
+          } else if (isJobTerminal(jobData.status)) {
+            setSelectedPhaseId('EXTRACTION_CATALOG');
+          }
         }
       }
     } catch (e) {

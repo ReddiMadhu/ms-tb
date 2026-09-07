@@ -262,7 +262,7 @@ export const PIPELINE_PHASES: PhaseConfig[] = [
   {
     id: 'QUALITY_PACKAGE',
     number: 4,
-    title: 'Publish & Export Center',
+    title: 'Export Center',
     description: 'Multi-gate validation, production promotion, reconciliation & export',
     icon: 'ShieldCheck',
     color: 'var(--yellow)',

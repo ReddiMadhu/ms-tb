@@ -184,11 +184,33 @@ export default function NewJobPage() {
     }
   };
 
+  const INSURANCE_PATTERN = /\b(claims?|underwrit(er|ing|es)?|underwtries|cross[- ]?sell|policy|insurance)\b/i;
+
+  const isInsuranceDossier = (d: DiscoveredDossier) => {
+    return INSURANCE_PATTERN.test(d.name) || INSURANCE_PATTERN.test(d.path || '');
+  };
+
   const filteredDossiers = discoveredDossiers.filter(d =>
     d.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
     (d.path && d.path.toLowerCase().includes(searchQuery.toLowerCase())) ||
     (d.owner && d.owner.toLowerCase().includes(searchQuery.toLowerCase()))
   );
+
+  const insuranceDossiers = filteredDossiers.filter(isInsuranceDossier);
+
+  const handleSelectInsurance = () => {
+    const insuranceIds = insuranceDossiers.map(d => d.mstr_id);
+    const allInsuranceSelected =
+      insuranceIds.length > 0 &&
+      insuranceIds.every(id => selectedDossierIds.includes(id)) &&
+      selectedDossierIds.length === insuranceIds.length;
+
+    if (allInsuranceSelected) {
+      setSelectedDossierIds([]);
+    } else {
+      setSelectedDossierIds(insuranceIds);
+    }
+  };
 
   async function handleSubmit() {
     setLoading(true);
@@ -630,6 +652,22 @@ export default function NewJobPage() {
                     onChange={e => setSearchQuery(e.target.value)}
                   />
                 </div>
+
+                <button
+                  type="button"
+                  className={`btn btn-secondary btn-sm ${
+                    insuranceDossiers.length > 0 &&
+                    insuranceDossiers.every(d => selectedDossierIds.includes(d.mstr_id)) &&
+                    selectedDossierIds.length === insuranceDossiers.length
+                      ? 'active'
+                      : ''
+                  }`}
+                  onClick={handleSelectInsurance}
+                  title="Select only insurance dossiers (claims, underwriting, cross sell, policy)"
+                >
+                  <ShieldCheck size={13} />
+                  Insurance ({insuranceDossiers.length})
+                </button>
 
                 <button
                   type="button"

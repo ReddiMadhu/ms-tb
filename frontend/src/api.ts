@@ -10,6 +10,20 @@ async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
   return res.json();
 }
 
+async function triggerFileDownload(url: string, defaultFilename: string): Promise<void> {
+  const res = await fetch(`${API_BASE}${url}`);
+  if (!res.ok) throw new Error(`Download failed (${res.status}): ${await res.text()}`);
+  const blob = await res.blob();
+  const blobUrl = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = blobUrl;
+  a.download = defaultFilename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  window.URL.revokeObjectURL(blobUrl);
+}
+
 // ── Types ─────────────────────────────────────────────────────
 
 export interface JobCreateInput {

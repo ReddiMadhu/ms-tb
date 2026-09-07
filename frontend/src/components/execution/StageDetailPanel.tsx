@@ -86,7 +86,7 @@ export const StageDetailPanel: React.FC<StageDetailPanelProps> = ({
       case 'WORKBOOK_EMIT_PRODUCTION':
       case 'PROMOTE':
       case 'RECONCILE':
-        return { label: 'View Publish & Export Center', to: `/jobs/${jobId}/exports` };
+        return { label: 'View Export Center', to: `/jobs/${jobId}/exports` };
       default:
         return null;
     }

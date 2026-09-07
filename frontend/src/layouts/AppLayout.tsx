@@ -67,7 +67,7 @@ export default function AppLayout() {
       } else if (path.includes('/dashboards')) {
         parts.push({ label: 'Visual Conversion Report', to: `/jobs/${jobId}/dashboards` });
       } else if (path.includes('/exports') || path.includes('/review') || path.includes('/report')) {
-        parts.push({ label: 'Publish & Export Center', to: `/jobs/${jobId}/exports` });
+        parts.push({ label: 'Export Center', to: `/jobs/${jobId}/exports` });
       } else if (path.includes('/audit')) {
         parts.push({ label: 'Audit Trail', to: `/jobs/${jobId}/audit` });
       }
